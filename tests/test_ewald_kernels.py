@@ -6,8 +6,8 @@ Only meaningful when numba is actually installed (otherwise the kernel
 
 import numpy as np
 import pytest
-
 from conftest import requires_numba
+
 from ikazuchix.ewald_kernels import (
     ewald_real_shell_ring_sum,
     ewald_real_shell_sum,
@@ -15,9 +15,7 @@ from ikazuchix.ewald_kernels import (
     ewald_recip_shell_sum,
 )
 
-L = np.array([[9.57, 0.0, 0.0],
-              [-4.785, 8.2877, 0.0],
-              [0.0, 0.0, 10.38]])
+L = np.array([[9.57, 0.0, 0.0], [-4.785, 8.2877, 0.0], [0.0, 0.0, 10.38]])
 EPS = np.array([[9.5, 0.0, 0.0], [0.0, 9.5, 0.0], [0.0, 0.0, 10.4]])
 EPS_INV = np.linalg.inv(EPS)
 G_MAT = 2.0 * np.pi * np.linalg.inv(L).T
@@ -45,7 +43,27 @@ def test_recip_kernel_matches_py_func():
 
 def test_real_kernel_matches_reference_numpy_implementation():
     """Cross-check against a direct, independent numpy/itertools formula
-    (not the production code path) for one shell count."""
+    (not the production code path) for one shell count.
+
+    Compared with a tolerance, not bit-exactly, precisely *because* the
+    reference is independent: it takes the distance from
+    ``np.linalg.norm`` while the kernel computes
+    ``math.sqrt(Rx*Rx + Ry*Ry + Rz*Rz)`` directly. Those are different
+    algorithms -- numpy dispatches to a scaling-robust BLAS routine --
+    so whether they agree in the last bit depends on the platform's
+    BLAS and libm. They happen to agree on macOS/Accelerate and differ
+    by 1 ULP on Linux/OpenBLAS, which is what an earlier strict `==`
+    here tripped over in CI (the discrepancy surfaced only in `Eo`: it
+    sums the outermost shell alone, ~200x smaller than the full `E`, so
+    a last-ULP term error that `E`'s much larger running sum absorbs
+    stays visible in `Eo`).
+
+    1e-12 is ~4 orders of magnitude above that ULP noise while still
+    far tighter than any real formula defect (a wrong sign, coefficient
+    or missing term) could hide under. Bit-exactness *is* asserted
+    elsewhere in this file, where it is a genuine project guarantee:
+    between the JIT kernel and its own ``.py_func`` twin.
+    """
     import itertools
     import math
 
@@ -62,13 +80,14 @@ def test_real_kernel_matches_reference_numpy_implementation():
             Eo_ref += abs(term)
 
     E, Eo = ewald_real_shell_sum(n, L, ETA, EPS_AVG)
-    assert E == E_ref
-    assert Eo == Eo_ref
+    assert E == pytest.approx(E_ref, rel=1e-12)
+    assert Eo == pytest.approx(Eo_ref, rel=1e-12)
 
 
 # ===========================================================================
 # Perf-2: outer-shell-only ("ring") kernels
 # ===========================================================================
+
 
 @requires_numba
 def test_real_ring_kernel_matches_py_func():
