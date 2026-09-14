@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
-      - run: pytest -v
+      - run: pytest -v -rs
 
   full:
     # Adds the optional extras via pip. mpi4py's package install
@@ -34,7 +34,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[all,dev]"
-      - run: pytest -v
+      - run: pytest -v -rs
 
   mpi:
     # Installs a real MPI runtime so the mpirun-based tests
@@ -54,4 +54,4 @@ jobs:
           python-version: "3.11"
       - run: sudo apt-get update && sudo apt-get install -y openmpi-bin libopenmpi-dev
       - run: pip install -e ".[all,dev]"
-      - run: pytest tests/test_mpi_consistency.py -v
+      - run: pytest tests/test_mpi_consistency.py -v -rs
