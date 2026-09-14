@@ -1,0 +1,45 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# AI-assisted-development tooling (process artifacts, not the package)
+.claude/
+.code-check/
+.github_release/
+.pip_preparation/
+
+# Default CLI output (produced by running `python -m ikazuchix ...`
+# with the default --out-dir=. from the repo root) -- generated data,
+# not source, and easy to create by accident with a careless `git add .`.
+/results.txt
+/ef_vs_ef/
+/summary/
+/ctls_summary.txt
+/equilibrium_summary.txt
+/stability_summary.txt
+/plots/

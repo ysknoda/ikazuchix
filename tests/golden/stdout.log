@@ -1,0 +1,139 @@
+[INFO] Loading: examples/example_input.yaml
+[INFO] Auto-completed composition for V_Ga q=+0: {'Ga': 35, 'N': 36}
+[INFO] Auto-completed composition for V_Ga q=-1: {'Ga': 35, 'N': 36}
+[INFO] Auto-completed composition for V_Ga q=-2: {'Ga': 35, 'N': 36}
+[INFO] Auto-completed composition for V_N q=+0: {'Ga': 36, 'N': 35}
+[INFO] Auto-completed composition for V_N q=+1: {'Ga': 36, 'N': 35}
+[INFO] Checking chemical potential consistency ...
+[INFO] Chem.pot. host stability check passed (diff = 0.0000 eV/atom).
+[INFO] Reference Fermi level (rel. VBM): 0.8500 eV
+[INFO] Fermi sweep: [-0.1700, 1.8700] eV (400 points)
+[INFO] Computing KO corrections and formation energies ...
+
+[INFO] ---- Defect: V_Ga ----
+[INFO]   q=+0: E_KO=+0.0000 eV, E_f(E_F=0.850 eV)=+5.5000 eV
+[INFO]   q=-1: E_KO=+2.1759 eV, E_f(E_F=0.850 eV)=+5.1500 eV
+[INFO]   q=-2: E_KO=+8.6836 eV, E_f(E_F=0.850 eV)=+5.5000 eV
+
+[INFO] ---- Defect: V_N ----
+[INFO]   q=+0: E_KO=+0.0000 eV, E_f(E_F=0.850 eV)=+4.0000 eV
+[WARNING] V_N q=+1: delta_v=0.0; KO alignment term is zero.
+[INFO]   q=+1: E_KO=+2.1959 eV, E_f(E_F=0.850 eV)=+3.8500 eV
+
+=================================================================
+  DEFECT FORMATION ENERGY REPORT
+  Method: Kumagai-Oba (PRB 89, 195205, 2014)
+=================================================================
+
+[System]
+  Host material      : GaN
+  Defects computed   : ['V_Ga', 'V_N']
+
+[Band Structure]
+  VBM                : 5.0000 eV
+  CBM                : 6.7000 eV
+  Band gap           : 1.7000 eV
+  Fermi level (ref)  : 0.8500 eV  (relative to VBM)
+  Fermi sweep range  : [-0.1700, 1.8700] eV
+  Fermi grid points  : 400
+
+[Dielectric]
+  Scalar average eps : 9.8000
+  Full tensor        : [[9.5, 0.0, 0.0], [0.0, 9.5, 0.0], [0.0, 0.0, 10.4]]
+
+[Supercell Geometry]
+  Lattice a          : [9.57, 0.0, 0.0]
+  Lattice b          : [-4.785, 8.2877, 0.0]
+  Lattice c          : [0.0, 0.0, 10.38]
+  Volume             : 823.2719 Ang^3
+  Ewald eta (auto)     : 0.189116 Ang^-1
+
+
+=================================================================
+  DEFECT: V_Ga  (vacancy)
+=================================================================
+  Charge states : [-2, -1, 0]
+
+  [KO Correction Breakdown]
+    q = -2
+      E_real        : +2.370700 eV
+      E_recip       : +6.926766 eV
+      E_self(Ewald) : -0.200320 eV
+      E_neutralize  : -0.313551 eV
+      E_lat         : +8.783594 eV
+      E_alignment   : -0.100000 eV
+      E_KO (total)  : +8.683594 eV
+      Chem.pot.corr.: -3.031000 eV
+      E_f(E_F=0.850 eV) : +5.499994 eV
+    q = -1
+      E_real        : +0.592675 eV
+      E_recip       : +1.731691 eV
+      E_self(Ewald) : -0.050080 eV
+      E_neutralize  : -0.078388 eV
+      E_lat         : +2.195899 eV
+      E_alignment   : -0.020000 eV
+      E_KO (total)  : +2.175899 eV
+      Chem.pot.corr.: -3.031000 eV
+      E_f(E_F=0.850 eV) : +5.149999 eV
+    q = +0
+      E_real        : +0.000000 eV
+      E_recip       : +0.000000 eV
+      E_self(Ewald) : +0.000000 eV
+      E_neutralize  : +0.000000 eV
+      E_lat         : +0.000000 eV
+      E_alignment   : +0.000000 eV
+      E_KO (total)  : +0.000000 eV
+      Chem.pot.corr.: -3.031000 eV
+      E_f(E_F=0.850 eV) : +5.500000 eV
+
+  [Stable CTLs  (on the envelope, within band gap)]
+    eps(-1/+0)  at  E_F = +0.5000 eV  [E_f = +5.5000 eV]
+    eps(-2/-1)  at  E_F = +1.2000 eV  [E_f = +4.8000 eV]
+
+  [Meta-stable CTLs  (off envelope or outside gap)]
+    eps(-2/+0)  at  E_F = +0.8500 eV  [E_f = +5.5000 eV]
+
+=================================================================
+  DEFECT: V_N  (vacancy)
+=================================================================
+  Charge states : [0, 1]
+
+  [KO Correction Breakdown]
+    q = +0
+      E_real        : +0.000000 eV
+      E_recip       : +0.000000 eV
+      E_self(Ewald) : +0.000000 eV
+      E_neutralize  : +0.000000 eV
+      E_lat         : +0.000000 eV
+      E_alignment   : +0.000000 eV
+      E_KO (total)  : +0.000000 eV
+      Chem.pot.corr.: -9.828000 eV
+      E_f(E_F=0.850 eV) : +4.000000 eV
+    q = +1
+      E_real        : +0.592675 eV
+      E_recip       : +1.731691 eV
+      E_self(Ewald) : -0.050080 eV
+      E_neutralize  : -0.078388 eV
+      E_lat         : +2.195899 eV
+      E_alignment   : +0.000000 eV
+      E_KO (total)  : +2.195899 eV
+      Chem.pot.corr.: -9.828000 eV
+      E_f(E_F=0.850 eV) : +3.849999 eV
+
+  [Stable CTLs  (on the envelope, within band gap)]
+    eps(+0/+1)  at  E_F = +1.0000 eV  [E_f = +4.0000 eV]
+
+-----------------------------------------------------------------
+  REFERENCE
+-----------------------------------------------------------------
+  Y. Kumagai and F. Oba, Phys. Rev. B 89, 195205 (2014).
+=================================================================
+[INFO] Report written to: tests/golden/results.txt
+[INFO] E_f table written to: tests/golden/ef_vs_ef/V_Ga_ef_vs_ef.txt
+[INFO] Summary written to: tests/golden/summary/V_Ga_summary.txt
+[INFO] E_f table written to: tests/golden/ef_vs_ef/V_N_ef_vs_ef.txt
+[INFO] Summary written to: tests/golden/summary/V_N_summary.txt
+[INFO] CTL summary written to: tests/golden/ctls_summary.txt
+[INFO] Per-defect plot saved to: tests/golden/plots/V_Ga_ef.png
+[INFO] Per-defect plot saved to: tests/golden/plots/V_N_ef.png
+[INFO] Comparison plot saved to: tests/golden/plots/comparison_plot.png

@@ -1,0 +1,1436 @@
+#!/usr/bin/env python3
+"""
+defect_formation_energy.py  --  Defect Formation Energy Calculator
+=================================================================
+Calculates defect formation energies in semiconductors from DFT total
+energies, applying the Kumagai-Oba (KO) finite-size charge correction:
+
+  Y. Kumagai and F. Oba, Phys. Rev. B 89, 195205 (2014).
+
+Run with -h or --help for full usage information.
+"""
+
+import argparse
+import math
+import itertools
+import os
+import textwrap
+import warnings
+
+import numpy as np
+import yaml
+
+# ---------------------------------------------------------------------------
+# Physical constants
+# ---------------------------------------------------------------------------
+EV_PER_HARTREE   = 27.211386245988   # 1 Hartree in eV
+BOHR_RADIUS_ANG  = 0.529177210903    # Bohr radius in Angstrom
+COULOMB_PREFACTOR = EV_PER_HARTREE * BOHR_RADIUS_ANG  # e^2/(4pieps_0) ~ 14.3996 eV*Ang
+
+N_FERMI_POINTS   = 400   # Fermi-level grid density
+EWALD_CONV_TOL   = 1e-6  # convergence threshold for Ewald sum shell check (eV)
+
+
+# ===========================================================================
+# I/O helpers
+# ===========================================================================
+
+def load_input(path):
+    """
+    Load the YAML input file and normalise to the multi-defect layout.
+
+    Accepted layouts
+    ----------------
+    Multi-defect  : top-level key 'defects' is a list of defect blocks.
+    Single-defect : legacy keys 'defect' + 'charge_states' at top level.
+                    Automatically wrapped into the multi-defect format.
+
+    Auto-completion
+    ---------------
+    If a charge_state entry omits 'composition', it is derived from the
+    defect's removed_atoms / added_atoms relative to the bulk composition.
+    """
+    with open(path, "r") as fh:
+        raw = yaml.safe_load(fh)
+
+    for key in ("bulk", "chemical_potentials", "elemental_references",
+                "band_structure", "dielectric", "supercell"):
+        if key not in raw:
+            raise KeyError(f"Missing required section '{key}' in input file.")
+
+    # --- normalise to multi-defect layout -----------------------------------
+    if "defects" in raw:
+        if not raw["defects"]:
+            raise ValueError("'defects' list must contain at least one entry.")
+        for d in raw["defects"]:
+            for k in ("name", "defect_type", "charge_states"):
+                if k not in d:
+                    raise KeyError(
+                        f"Defect entry is missing required key '{k}'.")
+            if not d["charge_states"]:
+                raise ValueError(
+                    f"Defect '{d['name']}' has an empty 'charge_states' list.")
+    elif "defect" in raw and "charge_states" in raw:
+        defect_block = dict(raw["defect"])
+        defect_block["charge_states"] = raw["charge_states"]
+        raw["defects"] = [defect_block]
+    else:
+        raise KeyError(
+            "Input file must contain either a 'defects' list "
+            "(multi-defect format) or both 'defect' and 'charge_states' "
+            "(legacy single-defect format).")
+
+    # --- auto-complete composition for each charge_state --------------------
+    bulk_comp = raw["bulk"]["composition"]
+    for d in raw["defects"]:
+        removed = d.get("removed_atoms", {}) or {}
+        added   = d.get("added_atoms",   {}) or {}
+        all_sp  = set(bulk_comp) | set(removed) | set(added)
+        auto_comp = {
+            sp: bulk_comp.get(sp, 0) - removed.get(sp, 0) + added.get(sp, 0)
+            for sp in all_sp if bulk_comp.get(sp, 0)
+                                 - removed.get(sp, 0)
+                                 + added.get(sp, 0) != 0
+        }
+        for cs in d["charge_states"]:
+            if "composition" not in cs or cs["composition"] is None:
+                cs["composition"] = auto_comp
+                print(f"[INFO] Auto-completed composition for "
+                      f"{d['name']} q={cs['charge']:+d}: {auto_comp}")
+
+    return raw
+
+
+def _safe_mkdir(path):
+    """Create directory if it does not already exist."""
+    if path and path != ".":
+        os.makedirs(path, exist_ok=True)
+
+
+def _out(base_dir, *parts):
+    """Join base_dir with path parts, creating dirs as needed."""
+    p = os.path.join(base_dir, *parts)
+    _safe_mkdir(os.path.dirname(p))
+    return p
+
+
+def write_text(path, lines):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print(f"[INFO] Report written to: {path}")
+
+
+def write_ef_table(path, defect_name, fermi_grid, ef_by_charge, envelope):
+    """Write E_f(q, E_F) + envelope as a fixed-width plain-text table."""
+    charges    = sorted(ef_by_charge.keys())
+    col_labels = (["EF_rel_VBM[eV]"]
+                  + [f"Ef(q={q:+d})[eV]" for q in charges]
+                  + ["Ef_envelope[eV]"])
+    COL_W = 18
+    SEP   = "  "
+
+    def row_str(vals):
+        return SEP.join(f"{str(v):>{COL_W}}" for v in vals)
+
+    header_str = row_str(col_labels)
+    ruler      = "-" * len(header_str)
+    lines = [
+        f"# Defect formation energy vs. Fermi level  [{defect_name}]",
+        "# Method: Kumagai-Oba correction (Phys. Rev. B 89, 195205, 2014)",
+        "#",
+        f"# Charge states included : {charges}",
+        f"# Fermi sweep range      : [{fermi_grid[0]:.6f}, "
+                                    f"{fermi_grid[-1]:.6f}] eV (rel. VBM)",
+        f"# Number of E_F points   : {len(fermi_grid)}",
+        "#",
+        "# EF_rel_VBM : Fermi level measured from the VBM (eV)",
+        "# Ef(q=...)  : Formation energy for charge state q (eV)",
+        "# Ef_envelope: Min E_f over all q at each E_F (stable envelope) (eV)",
+        "#",
+        ruler, header_str, ruler,
+    ]
+    for i, ef_val in enumerate(fermi_grid):
+        vals = ([f"{ef_val:+.6f}"]
+                + [f"{ef_by_charge[q][i]:+.6f}" for q in charges]
+                + [f"{envelope[i]:+.6f}"])
+        lines.append(row_str(vals))
+    lines.append(ruler)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print(f"[INFO] E_f table written to: {path}")
+
+
+def write_summary_txt(path, defect_name, summary_rows, fermi_ref):
+    """Write per-charge KO breakdown + E_f as a plain-text table."""
+    col_labels = [
+        "q", "E_KO[eV]", "E_real[eV]", "E_recip[eV]",
+        "E_self[eV]", "E_neut[eV]", "E_lat[eV]",
+        "E_align[eV]", f"Ef(EF={fermi_ref:.3f}eV)[eV]",
+    ]
+    COL_W_Q = 5
+    COL_W   = 18
+    SEP     = "  "
+
+    def row_str(vals):
+        parts = [f"{str(vals[0]):>{COL_W_Q}}"]
+        parts += [f"{str(v):>{COL_W}}" for v in vals[1:]]
+        return SEP.join(parts)
+
+    header_str = row_str(col_labels)
+    ruler      = "-" * len(header_str)
+    lines = [
+        f"# Defect formation energy summary  [{defect_name}]",
+        "# Method: Kumagai-Oba corrected",
+        f"# Fermi level reference : {fermi_ref:.4f} eV "
+        "(relative to VBM; negative = below VBM)",
+        "#",
+        "# q       : Charge state (electrons; negative = acceptor-like)",
+        "# E_KO    : Total Kumagai-Oba finite-size correction (eV)",
+        "# E_real  : Real-space Ewald sum (eV)",
+        "# E_recip : Reciprocal-space Ewald sum (eV)",
+        "# E_self  : Ewald Gaussian self-energy (eV)",
+        "# E_neut  : Jellium background neutralization (eV)",
+        "# E_lat   : Lattice energy = E_real+E_recip+E_self+E_neut (eV)",
+        "# E_align : Potential alignment = q * delta_V (eV)",
+        "# Ef      : Formation energy at the reference Fermi level (eV)",
+        "#",
+        ruler, header_str, ruler,
+    ]
+    for row in summary_rows:
+        vals = [
+            f"{row['q']:+d}",
+            f"{row['E_KO']:+.6f}", f"{row['E_real']:+.6f}",
+            f"{row['E_recip']:+.6f}", f"{row['E_self_ewald']:+.6f}",
+            f"{row['E_neutralize']:+.6f}", f"{row['E_lat']:+.6f}",
+            f"{row['E_alignment']:+.6f}", f"{row['Ef_at_fermi']:+.6f}",
+        ]
+        lines.append(row_str(vals))
+    lines.append(ruler)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print(f"[INFO] Summary written to: {path}")
+
+
+def write_ctls_summary(path, all_results, gap):
+    """
+    Write a unified CTL summary table for all defects.
+
+    Columns: Defect, q1, q2, E_F_CTL[eV], Ef_CTL[eV], on_envelope
+    'on_envelope' = yes  when the CTL is within [0, gap] AND both charge
+                         states are adjacent on the stable envelope.
+    """
+    col_labels = ["Defect", "q1", "q2",
+                  "E_F_CTL[eV]", "Ef_CTL[eV]", "on_envelope"]
+    COL_W  = [12, 5, 5, 14, 14, 12]
+    SEP    = "  "
+
+    def row_str(vals):
+        return SEP.join(f"{str(v):>{w}}" for v, w in zip(vals, COL_W))
+
+    header_str = row_str(col_labels)
+    ruler      = "-" * len(header_str)
+    lines = [
+        "# Charge-State Transition Level (CTL) summary -- all defects",
+        "# Method: Kumagai-Oba corrected",
+        "#",
+        "# on_envelope : 'yes' = CTL lies within the band gap [0, gap] AND",
+        "#               represents an adjacency on the stable envelope.",
+        "#               'no'  = intersection outside the gap or between",
+        "#               charge states that are not envelope-adjacent.",
+        "#",
+        ruler, header_str, ruler,
+    ]
+    for res in all_results:
+        stable_ctls, meta_ctls = res["stable_ctls"], res["meta_ctls"]
+        for ctl in sorted(stable_ctls, key=lambda x: x["E_F_CTL"]):
+            lines.append(row_str([
+                res["name"],
+                f"{ctl['q1']:+d}", f"{ctl['q2']:+d}",
+                f"{ctl['E_F_CTL']:+.4f}", f"{ctl['E_f_CTL']:+.4f}", "yes",
+            ]))
+        for ctl in sorted(meta_ctls, key=lambda x: x["E_F_CTL"]):
+            lines.append(row_str([
+                res["name"],
+                f"{ctl['q1']:+d}", f"{ctl['q2']:+d}",
+                f"{ctl['E_F_CTL']:+.4f}", f"{ctl['E_f_CTL']:+.4f}", "no",
+            ]))
+    lines.append(ruler)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    print(f"[INFO] CTL summary written to: {path}")
+
+
+# ===========================================================================
+# Geometry helpers
+# ===========================================================================
+
+def build_lattice_matrix(supercell_dict):
+    lv = supercell_dict["lattice_vectors"]
+    return np.array([lv["a"], lv["b"], lv["c"]], dtype=float)
+
+def lattice_volume(L):
+    return abs(np.linalg.det(L))
+
+def reciprocal_lattice(L):
+    """Reciprocal lattice matrix (rows = G-vectors, 2pi convention) [Ang^-1]."""
+    return 2.0 * math.pi * np.linalg.inv(L).T
+
+def build_dielectric_tensor(dielectric_dict):
+    tensor = np.array(dielectric_dict["tensor"], dtype=float)
+    if tensor.shape != (3, 3):
+        raise ValueError("Dielectric tensor must be 3x3.")
+    return tensor
+
+def average_dielectric(eps):
+    return float(np.trace(eps) / 3.0)
+
+
+# ===========================================================================
+# Kumagai-Oba finite-size correction  (improved)
+# ===========================================================================
+
+class KumagaiObaCorrectionCalculator:
+    """
+    Finite-size charge correction: Kumagai & Oba, PRB 89, 195205 (2014).
+
+    E_KO  = E_lat + q * DeltaV
+    E_lat = E_real + E_recip + E_self_ewald + E_neutralize
+
+    Anisotropic dielectric screening (A-1)
+    ---------------------------------------
+    Following KO 2014, anisotropy is handled exclusively in the
+    reciprocal-space sum via the quadratic form G * eps^-1 * G (Eq. 14).
+    The real-space sum (Eq. 13) uses the scalar average eps_avg = tr(eps)/3,
+    which is the formulation adopted in the original paper.  This is the
+    physically correct decomposition: the long-range Fourier modes carry
+    the full tensor information, while the short-range real-space sum is
+    well-represented by the isotropic average.
+
+    Ewald convergence check (A-2)
+    ------------------------------
+    After each Ewald loop the outermost shell contribution is compared
+    against EWALD_CONV_TOL (default 1e-6 eV).  A RuntimeWarning is
+    emitted when the sum has not converged, prompting the user to
+    increase real_cutoff or recip_cutoff.
+
+    Result caching (C-3)
+    --------------------
+    compute() caches its result on the instance.  Repeated calls
+    (same calculator object) return immediately without recalculation.
+    """
+
+    def __init__(self, lattice, epsilon, charge, defect_frac, delta_v,
+                 ewald_param=None, real_cutoff=3, recip_cutoff=3,
+                 verbose=False):
+        self.L        = lattice
+        self.eps      = epsilon
+        self.q        = int(charge)
+        self.r_def    = np.array(defect_frac, dtype=float)
+        self.delta_v  = float(delta_v)
+        self.verbose  = verbose
+        self.V        = lattice_volume(lattice)
+        self.G_mat    = reciprocal_lattice(lattice)
+        self.eps_avg  = average_dielectric(epsilon)
+        self.eps_inv  = np.linalg.inv(epsilon)
+        # eta: heuristic  eta = sqrtpi / V^(1/3)  [Ang^-1]
+        self.eta      = (float(ewald_param) if ewald_param is not None
+                         else math.sqrt(math.pi) / (self.V ** (1.0 / 3.0)))
+        self.n_real   = int(real_cutoff)
+        self.n_recip  = int(recip_cutoff)
+        self._cache   = None   # (C-3) result cache
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _GEG(self, G):
+        """G * eps^-1 * G  [Ang^-2]."""
+        return float(G @ self.eps_inv @ G)
+
+    # ------------------------------------------------------------------
+    # Ewald real-space sum  (Eq. 13, KO 2014)
+    # ------------------------------------------------------------------
+
+    def _E_real(self):
+        """
+        E_real = (q^2/2) * K * sum_{R!=0} erfc(eta|R| / sqrteps_avg) / (eps_avg |R|)
+
+        Per KO 2014 the real-space sum uses the isotropic scalar dielectric
+        eps_avg = tr(eps)/3.  The full anisotropic screening is captured in the
+        reciprocal-space sum through G*eps^-1*G (Eq. 14).
+
+        Convergence check (A-2): contribution of the outermost shell is
+        accumulated and compared against EWALD_CONV_TOL.
+        """
+        E        = 0.0
+        E_outer  = 0.0
+        n        = self.n_real
+
+        for n1, n2, n3 in itertools.product(range(-n, n+1), repeat=3):
+            if n1 == 0 and n2 == 0 and n3 == 0:
+                continue
+            R    = n1*self.L[0] + n2*self.L[1] + n3*self.L[2]
+            r    = np.linalg.norm(R)
+            term = math.erfc(self.eta * r / math.sqrt(self.eps_avg)) / (
+                       self.eps_avg * r)
+            E   += term
+            if max(abs(n1), abs(n2), abs(n3)) == n:
+                E_outer += abs(term)
+
+        val = 0.5 * (self.q**2) * COULOMB_PREFACTOR * E
+        if 0.5 * (self.q**2) * COULOMB_PREFACTOR * E_outer > EWALD_CONV_TOL:
+            warnings.warn(
+                f"[KO real-space] Outermost shell contribution "
+                f"({0.5 * self.q**2 * COULOMB_PREFACTOR * E_outer:.2e} eV) "
+                f"exceeds tolerance {EWALD_CONV_TOL:.0e} eV.  "
+                f"Consider increasing real_cutoff (current: {n}).",
+                RuntimeWarning, stacklevel=4)
+        return val
+
+    # ------------------------------------------------------------------
+    # Ewald reciprocal-space sum  (Eq. 14, KO 2014)
+    # ------------------------------------------------------------------
+
+    def _E_recip(self):
+        """
+        E_recip = (q^2*K*4pi) / (V*sqrtdet eps) * sum_{G!=0}
+                  exp(-G*eps^-1*G / (4eta^2)) / (G*eps^-1*G)
+
+        Convergence check (A-2): outermost shell contribution monitored.
+        """
+        sqrt_det = math.sqrt(abs(np.linalg.det(self.eps)))
+        E        = 0.0
+        E_outer  = 0.0
+        n        = self.n_recip
+
+        for m1, m2, m3 in itertools.product(range(-n, n+1), repeat=3):
+            if m1 == 0 and m2 == 0 and m3 == 0:
+                continue
+            G   = m1*self.G_mat[0] + m2*self.G_mat[1] + m3*self.G_mat[2]
+            geg = self._GEG(G)
+            if geg < 1e-20:
+                continue
+            term  = math.exp(-geg / (4.0*self.eta**2)) / geg
+            E    += term
+            if max(abs(m1), abs(m2), abs(m3)) == n:
+                E_outer += abs(term)
+
+        prefactor = (self.q**2) * COULOMB_PREFACTOR * 4.0 * math.pi / (self.V * sqrt_det)
+        if E_outer * prefactor > EWALD_CONV_TOL:
+            warnings.warn(
+                f"[KO recip-space] Outermost shell contribution "
+                f"({E_outer * prefactor:.2e} eV) exceeds tolerance "
+                f"{EWALD_CONV_TOL:.0e} eV.  "
+                f"Consider increasing recip_cutoff (current: {n}).",
+                RuntimeWarning, stacklevel=4)
+
+        return prefactor * E
+
+    # ------------------------------------------------------------------
+    # Ewald self-energy  (Eq. 15, KO 2014)
+    # ------------------------------------------------------------------
+
+    def _E_self_ewald(self):
+        """
+        E_self = -q^2 * K * eta / (sqrtpi * eps_avg^(3/2))
+        """
+        return -(self.q**2) * COULOMB_PREFACTOR * self.eta / (
+            math.sqrt(math.pi) * self.eps_avg**1.5)
+
+    # ------------------------------------------------------------------
+    # Background neutralization  (Eq. 16, KO 2014)
+    # ------------------------------------------------------------------
+
+    def _E_neutralize(self):
+        """
+        E_bg = -q^2 * K * pi / (2 * V * eta^2 * eps_avg)
+        """
+        return -(self.q**2) * COULOMB_PREFACTOR * math.pi / (
+            2.0 * self.V * self.eta**2 * self.eps_avg)
+
+    # ------------------------------------------------------------------
+    # Public interface  (C-3: cached)
+    # ------------------------------------------------------------------
+
+    def compute(self):
+        """
+        Return a dict with all KO correction components [eV].
+        Result is cached: repeated calls return immediately.
+        """
+        if self._cache is not None:
+            return self._cache
+
+        if self.q == 0:
+            self._cache = {k: 0.0 for k in (
+                "E_real", "E_recip", "E_self_ewald", "E_neutralize",
+                "E_lat", "E_alignment", "E_KO")}
+            return self._cache
+
+        E_real       = self._E_real()
+        E_recip      = self._E_recip()
+        E_self_ewald = self._E_self_ewald()
+        E_neutralize = self._E_neutralize()
+        E_lat        = E_real + E_recip + E_self_ewald + E_neutralize
+        E_alignment  = self.q * self.delta_v
+        E_KO         = E_lat + E_alignment
+
+        self._cache = dict(
+            E_real=E_real, E_recip=E_recip,
+            E_self_ewald=E_self_ewald, E_neutralize=E_neutralize,
+            E_lat=E_lat, E_alignment=E_alignment, E_KO=E_KO)
+
+        if self.verbose:
+            print(f"\n  --- KO Correction (q={self.q:+d}) ---")
+            for k, v in self._cache.items():
+                print(f"    {k:20s} = {v:+.6f} eV")
+            print(f"    {'Ewald eta':20s} = {self.eta:.6f} Ang^-1")
+            print(f"    {'eps_avg':20s} = {self.eps_avg:.4f}")
+            print(f"    {'Volume':20s} = {self.V:.4f} Ang^3")
+
+        return self._cache
+
+
+# ===========================================================================
+# Chemical potential helpers  (A-4: consistency check added)
+# ===========================================================================
+
+def check_chemical_potentials(data):
+    """
+    Verify that the supplied chemical potentials satisfy the host
+    stability condition and that delta_mu values are within the
+    thermodynamically allowed range.
+
+    Checks performed
+    ----------------
+    1. sum_i x_i * mu_i  ~  E[host] / f.u.
+       (host formation enthalpy is reproduced by the given mu values)
+    2. deltamu_i <= 0 for all species (upper bound: elemental reference)
+    3. deltamu_i >= -|DeltaH_f| / x_i for each species (lower bound: host
+       decomposition stability)
+
+    Warnings are printed; no exception is raised so the calculation
+    still proceeds.
+    """
+    refs      = data["elemental_references"]
+    deltas    = data["chemical_potentials"]
+    bulk      = data["bulk"]
+    comp      = bulk["composition"]
+    n_atoms   = sum(comp.values())
+
+    # Derive number of formula units from the composition and the formula
+    # string.  Fall back to 1 if the formula unit cannot be determined.
+    total_e_bulk = float(bulk["energy"])
+
+    # mu_i = E_ref_i + deltamu_i
+    mu = {sp: refs.get(sp, 0.0) + deltas.get(sp, 0.0) for sp in comp}
+
+    # Check 1: host stability  sum x_i mu_i == E_bulk / N
+    e_per_atom_from_mu  = sum(comp[sp] * mu[sp] for sp in comp) / n_atoms
+    e_per_atom_from_dft = total_e_bulk / n_atoms
+    diff = abs(e_per_atom_from_mu - e_per_atom_from_dft)
+    if diff > 0.05:
+        warnings.warn(
+            f"[Chem.pot.] Host stability check: "
+            f"sum x_i*mu_i/atom = {e_per_atom_from_mu:.4f} eV  vs  "
+            f"E_bulk/atom = {e_per_atom_from_dft:.4f} eV  "
+            f"(diff = {diff:.4f} eV).  "
+            "This may indicate inconsistent chemical potentials or "
+            "a mismatch between the bulk supercell energy and the "
+            "elemental references.  Verify your input data.",
+            UserWarning, stacklevel=3)
+    else:
+        print(f"[INFO] Chem.pot. host stability check passed "
+              f"(diff = {diff:.4f} eV/atom).")
+
+    # Check 2: deltamu_i <= 0  (cannot exceed elemental reference)
+    for sp, dmu in deltas.items():
+        if dmu > 1e-6:
+            warnings.warn(
+                f"[Chem.pot.] delta_mu_{sp} = {dmu:+.4f} eV > 0.  "
+                "Chemical potential exceeds the elemental reference; "
+                "this is unphysical under equilibrium conditions.",
+                UserWarning, stacklevel=3)
+
+    # Check 3: formation enthalpy lower bound
+    # DeltaH_f (per atom) ~ E_bulk/atom - sum x_i E_ref_i / N
+    dH_f_per_atom = (total_e_bulk / n_atoms
+                     - sum(comp[sp] * refs.get(sp, 0.0)
+                           for sp in comp) / n_atoms)
+    for sp in comp:
+        x_i   = comp[sp] / n_atoms
+        lb    = dH_f_per_atom / x_i if x_i > 0 else -999
+        dmu_i = deltas.get(sp, 0.0)
+        if dmu_i < lb - 0.01:
+            warnings.warn(
+                f"[Chem.pot.] delta_mu_{sp} = {dmu_i:+.4f} eV is below "
+                f"the estimated lower bound {lb:+.4f} eV "
+                "(host decomposition limit).  "
+                "Verify chemical potential conditions.",
+                UserWarning, stacklevel=3)
+
+
+def chem_pot_correction(data, cs_entry):
+    """Return (correction [eV], delta_n dict) for one charge-state entry."""
+    refs      = data["elemental_references"]
+    deltas    = data["chemical_potentials"]
+    def_comp  = cs_entry["composition"]
+    bulk_comp = data["bulk"]["composition"]
+    all_sp    = set(list(def_comp.keys()) + list(bulk_comp.keys()))
+    delta_n   = {sp: def_comp.get(sp, 0) - bulk_comp.get(sp, 0)
+                 for sp in all_sp}
+    corr = 0.0
+    for sp, dn in delta_n.items():
+        mu    = refs.get(sp, 0.0) + deltas.get(sp, 0.0)
+        corr -= dn * mu
+    return corr, delta_n
+
+
+# ===========================================================================
+# Formation energy
+# ===========================================================================
+
+def formation_energy(E_defect, E_bulk, chem_corr, q, E_VBM, fermi_rel, E_KO):
+    """
+    E_f(q, E_F) = (E_defect - E_bulk) + chem_corr + q*(E_VBM + E_F) + E_KO
+
+    fermi_rel may be a scalar (float) or a numpy array.
+    When an array is supplied the return value is also an array, enabling
+    vectorised sweep calculations (D-2).
+    """
+    return (E_defect - E_bulk) + chem_corr + q * (E_VBM + fermi_rel) + E_KO
+
+
+# ===========================================================================
+# CTL detection and classification  (A-3, D-3)
+# ===========================================================================
+
+def analytic_ctls(charges, ef_intercepts):
+    """
+    Compute charge-state transition levels (CTLs) analytically (D-3).
+
+    Each E_f curve is a straight line:
+        E_f(q, E_F) = a_q + q * E_F
+    where a_q = (E_defect - E_bulk) + chem_corr + q*VBM + E_KO is the
+    y-intercept at E_F = 0 (VBM).
+
+    The crossing of lines q1 and q2:
+        a_q1 + q1 * E_F* = a_q2 + q2 * E_F*
+        => E_F* = (a_q2 - a_q1) / (q1 - q2)   [exact, no grid dependence]
+        => E_f* = a_q1 + q1 * E_F*
+
+    Parameters
+    ----------
+    charges       : sorted list of charge integers
+    ef_intercepts : dict  {q: float}  --  a_q = E_f(q, E_F=0)
+
+    Returns
+    -------
+    list of dicts with keys q1, q2, E_F_CTL, E_f_CTL
+    """
+    ctls = []
+    for i, q1 in enumerate(charges):
+        for q2 in charges[i + 1:]:
+            dq = q1 - q2
+            if dq == 0:
+                continue          # same slope: parallel lines, no crossing
+            ef_star = (ef_intercepts[q2] - ef_intercepts[q1]) / dq
+            eform   = ef_intercepts[q1] + q1 * ef_star
+            ctls.append(dict(q1=q1, q2=q2, E_F_CTL=ef_star, E_f_CTL=eform))
+    return ctls
+
+
+def find_ctls(charges, ef_by_charge, fermi_grid):
+    """Find all CTLs by linear interpolation of sign changes."""
+    ctls = []
+    for i, q1 in enumerate(charges):
+        for q2 in charges[i+1:]:
+            diff  = ef_by_charge[q1] - ef_by_charge[q2]
+            signs = np.where(np.diff(np.sign(diff)))[0]
+            for idx in signs:
+                x0, x1 = fermi_grid[idx], fermi_grid[idx+1]
+                y0, y1 = diff[idx], diff[idx+1]
+                if abs(y1 - y0) < 1e-12:
+                    continue
+                ef_cross = x0 - y0 * (x1 - x0) / (y1 - y0)
+                t        = (ef_cross - x0) / (x1 - x0)
+                eform    = (ef_by_charge[q1][idx]
+                            + t * (ef_by_charge[q1][idx+1]
+                                   - ef_by_charge[q1][idx]))
+                ctls.append(dict(q1=q1, q2=q2,
+                                 E_F_CTL=ef_cross, E_f_CTL=eform))
+    return ctls
+
+
+def classify_ctls(ctls, charges, ef_by_charge, fermi_grid, gap):
+    """
+    Split CTLs into stable (envelope) and meta-stable lists.
+
+    A CTL is classified as 'stable' (on the envelope) when:
+      1. It lies within the band gap: 0 <= E_F_CTL <= gap
+      2. At E_F_CTL the formation energy of both q1 and q2 equals the
+         envelope minimum to within a small tolerance (1 meV).
+    All other intersections are meta-stable.
+    """
+    stable, meta = [], []
+    envelope = np.min(np.vstack([ef_by_charge[q] for q in charges]), axis=0)
+
+    for ctl in ctls:
+        ef = ctl["E_F_CTL"]
+        if not (0.0 <= ef <= gap):
+            meta.append(ctl)
+            continue
+        # Interpolate envelope value at the CTL position
+        idx  = np.searchsorted(fermi_grid, ef)
+        idx  = min(idx, len(fermi_grid) - 2)
+        t    = (ef - fermi_grid[idx]) / (fermi_grid[idx+1] - fermi_grid[idx])
+        env  = envelope[idx] + t * (envelope[idx+1] - envelope[idx])
+        if abs(ctl["E_f_CTL"] - env) < 1e-3:
+            stable.append(ctl)
+        else:
+            meta.append(ctl)
+
+    return stable, meta
+
+
+def stable_envelope(charges, ef_by_charge):
+    return np.min(np.vstack([ef_by_charge[q] for q in charges]), axis=0)
+
+
+# ===========================================================================
+# Per-defect calculation loop  (C-2: fermi_grid passed in)
+# ===========================================================================
+
+def run_one_defect(defect_block, data, fermi_ref, fermi_grid, verbose=False):
+    """
+    Compute KO corrections and formation energies for a single defect type.
+
+    Parameters
+    ----------
+    defect_block : dict   - one entry from data["defects"]
+    data         : dict   - full parsed input
+    fermi_ref    : float  - reference E_F [eV, rel. VBM]
+    fermi_grid   : ndarray - shared Fermi-level grid (C-2)
+    verbose      : bool
+
+    Returns
+    -------
+    dict with keys: name, defect_type, charges, ko, ef_by_charge,
+                    ef_at_fermi, fermi_grid, chem_pot_corr, delta_n,
+                    ctls, stable_ctls, meta_ctls, envelope
+    """
+    bs  = data["band_structure"]
+    vbm = bs["vbm"]
+    gap = bs["cbm"] - vbm
+
+    # Supercell: per-defect override or top-level fallback
+    sc_dict = defect_block.get("supercell", data.get("supercell"))
+    if sc_dict is None:
+        raise KeyError(
+            f"Defect '{defect_block['name']}' has no 'supercell' block "
+            "and no top-level 'supercell' is defined.")
+    lattice = build_lattice_matrix(sc_dict)
+    epsilon = build_dielectric_tensor(data["dielectric"])
+    def_pos = sc_dict["defect_position"]
+
+    charges, ko_results, ef_by_charge = [], {}, {}
+    ef_at_fermi, chem_corrs, delta_ns = {}, {}, {}
+
+    defect_name = defect_block["name"]
+    print(f"\n[INFO] ---- Defect: {defect_name} ----")
+
+    for cs in defect_block["charge_states"]:
+        q       = int(cs["charge"])
+        delta_v = float(cs.get("potential_alignment", {}).get("delta_v", 0.0))
+        if delta_v == 0.0 and q != 0:
+            print(f"[WARNING] {defect_name} q={q:+d}: delta_v=0.0; "
+                  "KO alignment term is zero.")
+
+        ko_calc = KumagaiObaCorrectionCalculator(
+            lattice=lattice, epsilon=epsilon, charge=q,
+            defect_frac=def_pos, delta_v=delta_v, verbose=verbose)
+        ko = ko_calc.compute()  # cached after first call
+
+        chem_corr, delta_n = chem_pot_correction(data, cs)
+        E_def  = float(cs["energy"])
+        E_bulk = float(data["bulk"]["energy"])
+
+        # D-2: vectorised -- formation_energy accepts ndarray for fermi_rel
+        ef_arr = formation_energy(
+            E_def, E_bulk, chem_corr, q, vbm, fermi_grid, ko["E_KO"])
+        ef_ref = formation_energy(
+            E_def, E_bulk, chem_corr, q, vbm, fermi_ref, ko["E_KO"])
+
+        charges.append(q)
+        ko_results[q]   = ko
+        ef_by_charge[q] = ef_arr
+        ef_at_fermi[q]  = ef_ref
+        chem_corrs[q]   = chem_corr
+        delta_ns[q]     = delta_n
+
+        print(f"[INFO]   q={q:+d}: E_KO={ko['E_KO']:+.4f} eV, "
+              f"E_f(E_F={fermi_ref:.3f} eV)={ef_ref:+.4f} eV")
+
+    charges.sort()
+    # D-3: analytic CTLs from y-intercepts (E_f at E_F = VBM = 0)
+    ef_intercepts = {
+        q: formation_energy(
+            float(data["bulk"]["energy"]),  # placeholder; use ef_at_fermi trick
+            0.0, 0.0, 0, 0.0, 0.0, 0.0)   # dummy -- computed below
+        for q in charges
+    }
+    # Correct: intercept = E_f(q, EF=0) stored in ef_at_fermi when fermi_ref=0,
+    # or derived as ef_arr value at the grid point nearest to EF=0.
+    # Most robust: use the vectorised formula directly.
+    ef_intercepts = {}
+    for q in charges:
+        # a_q = E_f(q, EF=0).  Since ef_arr = a_q + q*fermi_grid,
+        # a_q = ef_arr[idx_zero] - q*fermi_grid[idx_zero]
+        idx_zero = int(np.argmin(np.abs(fermi_grid)))
+        ef_intercepts[q] = (ef_by_charge[q][idx_zero]
+                            - q * fermi_grid[idx_zero])
+    all_ctls            = analytic_ctls(charges, ef_intercepts)
+    stable_ctls, meta_ctls = classify_ctls(
+        all_ctls, charges, ef_by_charge, fermi_grid, gap)
+    envelope = stable_envelope(charges, ef_by_charge)
+
+    return dict(
+        name=defect_name,
+        defect_type=defect_block.get("defect_type", ""),
+        charges=charges, ko=ko_results,
+        ef_by_charge=ef_by_charge, ef_at_fermi=ef_at_fermi,
+        fermi_grid=fermi_grid, chem_pot_corr=chem_corrs,
+        delta_n=delta_ns,
+        ctls=all_ctls, stable_ctls=stable_ctls, meta_ctls=meta_ctls,
+        envelope=envelope)
+
+
+def run_all_defects(data, fermi_ref, fermi_grid, verbose=False):
+    """
+    Run run_one_defect for every defect in data["defects"].
+    The shared fermi_grid (C-2) ensures all results are on the same axis.
+    """
+    return [
+        run_one_defect(d, data, fermi_ref, fermi_grid, verbose=verbose)
+        for d in data["defects"]
+    ]
+
+
+# ===========================================================================
+# Text report
+# ===========================================================================
+
+def format_report(data, all_results, fermi_ref):
+    """Build the multi-defect plain-text report."""
+    sep  = "=" * 65
+    sep2 = "-" * 65
+    bs   = data["band_structure"]
+    eps  = build_dielectric_tensor(data["dielectric"])
+    gap  = bs["cbm"] - bs["vbm"]
+
+    lines = [
+        sep,
+        "  DEFECT FORMATION ENERGY REPORT",
+        "  Method: Kumagai-Oba (PRB 89, 195205, 2014)",
+        sep, "",
+        "[System]",
+        f"  Host material      : {data['bulk']['formula']}",
+        f"  Defects computed   : {[r['name'] for r in all_results]}",
+        "",
+        "[Band Structure]",
+        f"  VBM                : {bs['vbm']:.4f} eV",
+        f"  CBM                : {bs['cbm']:.4f} eV",
+        f"  Band gap           : {bs['bandgap']:.4f} eV",
+        f"  Fermi level (ref)  : {fermi_ref:.4f} eV  (relative to VBM)",
+        f"  Fermi sweep range  : [{all_results[0]['fermi_grid'][0]:.4f}, "
+                               f"{all_results[0]['fermi_grid'][-1]:.4f}] eV",
+        f"  Fermi grid points  : {len(all_results[0]['fermi_grid'])}",
+        "",
+        "[Dielectric]",
+        f"  Scalar average eps : {average_dielectric(eps):.4f}",
+        f"  Full tensor        : {eps.tolist()}",
+        "",
+        "[Supercell Geometry]",
+    ]
+    # D-5: show supercell lattice and Ewald parameter for each defect
+    sc_dict_top = data.get("supercell", {})
+    if sc_dict_top:
+        L_top = build_lattice_matrix(sc_dict_top)
+        V_top = lattice_volume(L_top)
+        eta_top = math.sqrt(math.pi) / (V_top ** (1.0 / 3.0))
+        lines += [
+            f"  Lattice a          : {sc_dict_top['lattice_vectors']['a']}",
+            f"  Lattice b          : {sc_dict_top['lattice_vectors']['b']}",
+            f"  Lattice c          : {sc_dict_top['lattice_vectors']['c']}",
+            f"  Volume             : {V_top:.4f} Ang^3",
+            f"  Ewald eta (auto)     : {eta_top:.6f} Ang^-1",
+        ]
+    lines += [""]
+
+    for res in all_results:
+        lines += [
+            "", sep,
+            f"  DEFECT: {res['name']}  ({res['defect_type']})",
+            sep,
+            f"  Charge states : {res['charges']}",
+            "",
+            "  [KO Correction Breakdown]",
+        ]
+        for q in res["charges"]:
+            ko = res["ko"][q]
+            lines += [
+                f"    q = {q:+d}",
+                f"      E_real        : {ko['E_real']:+.6f} eV",
+                f"      E_recip       : {ko['E_recip']:+.6f} eV",
+                f"      E_self(Ewald) : {ko['E_self_ewald']:+.6f} eV",
+                f"      E_neutralize  : {ko['E_neutralize']:+.6f} eV",
+                f"      E_lat         : {ko['E_lat']:+.6f} eV",
+                f"      E_alignment   : {ko['E_alignment']:+.6f} eV",
+                f"      E_KO (total)  : {ko['E_KO']:+.6f} eV",
+                f"      Chem.pot.corr.: {res['chem_pot_corr'][q]:+.6f} eV",
+                f"      E_f(E_F={fermi_ref:.3f} eV) : "
+                f"{res['ef_at_fermi'][q]:+.6f} eV",
+            ]
+
+        lines += ["", "  [Stable CTLs  (on the envelope, within band gap)]"]
+        if res["stable_ctls"]:
+            for ctl in sorted(res["stable_ctls"], key=lambda x: x["E_F_CTL"]):
+                lines.append(
+                    f"    eps({ctl['q1']:+d}/{ctl['q2']:+d})  at  "
+                    f"E_F = {ctl['E_F_CTL']:+.4f} eV  "
+                    f"[E_f = {ctl['E_f_CTL']:+.4f} eV]")
+        else:
+            lines.append("    None within the band gap.")
+
+        if res["meta_ctls"]:
+            lines += ["", "  [Meta-stable CTLs  (off envelope or outside gap)]"]
+            for ctl in sorted(res["meta_ctls"], key=lambda x: x["E_F_CTL"]):
+                lines.append(
+                    f"    eps({ctl['q1']:+d}/{ctl['q2']:+d})  at  "
+                    f"E_F = {ctl['E_F_CTL']:+.4f} eV  "
+                    f"[E_f = {ctl['E_f_CTL']:+.4f} eV]")
+
+    lines += [
+        "", sep2,
+        "  REFERENCE",
+        sep2,
+        "  Y. Kumagai and F. Oba, Phys. Rev. B 89, 195205 (2014).",
+        sep,
+    ]
+    return lines
+
+
+# ===========================================================================
+# Plotting helpers
+# ===========================================================================
+
+_DEFECT_COLORS = [
+    "#2563EB", "#DC2626", "#16A34A", "#D97706", "#7C3AED",
+    "#0891B2", "#DB2777", "#65A30D", "#EA580C", "#4B5563",
+    "#92400E", "#0F766E",
+]
+_CHARGE_COLORS = [
+    "#2563EB", "#DC2626", "#16A34A", "#D97706", "#7C3AED",
+    "#0891B2", "#DB2777", "#65A30D", "#EA580C", "#4B5563",
+]
+
+def _defect_color(idx):
+    return _DEFECT_COLORS[idx % len(_DEFECT_COLORS)]
+
+def _charge_color(q, charges):
+    return _CHARGE_COLORS[charges.index(q) % len(_CHARGE_COLORS)]
+
+
+def _draw_band_edges(ax, gap, x_lo, x_hi):
+    """Draw VBM/CBM lines; shade out-of-gap regions."""
+    ax.axvline(0,   color="#64748B", lw=1.0, zorder=2)
+    ax.axvline(gap, color="#64748B", lw=1.0, zorder=2)
+    ax.text(0,   0.01, "VBM", transform=ax.get_xaxis_transform(),
+            ha="right", va="bottom", fontsize=8, color="#475569")
+    ax.text(gap, 0.01, "CBM", transform=ax.get_xaxis_transform(),
+            ha="left",  va="bottom", fontsize=8, color="#475569")
+    if x_lo < 0:
+        ax.axvspan(x_lo, 0,   color="#E2E8F0", alpha=0.55, zorder=0,
+                   label="Below VBM")
+    if x_hi > gap:
+        ax.axvspan(gap, x_hi, color="#FEF9C3", alpha=0.55, zorder=0,
+                   label="Above CBM")
+
+
+def plot_single_defect(data, res, fermi_ref, out_path):
+    """Two-panel figure: E_f vs E_F + E_KO bar chart (per defect)."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+    except ImportError:
+        print("[WARNING] matplotlib not installed. Skipping plot.")
+        return
+
+    charges = res["charges"]
+    grid    = res["fermi_grid"]
+    gap     = data["band_structure"]["cbm"] - data["band_structure"]["vbm"]
+    x_lo, x_hi = grid[0], grid[-1]
+
+    fig, (ax, ax2) = plt.subplots(
+        2, 1, figsize=(8, 9),
+        gridspec_kw={"height_ratios": [3, 1], "hspace": 0.40})
+
+    for q in charges:
+        ax.plot(grid, res["ef_by_charge"][q],
+                lw=1.6, ls="--", color=_charge_color(q, charges),
+                alpha=0.70, label=f"q = {q:+d}", zorder=3)
+
+    ax.plot(grid, res["envelope"],
+            lw=2.8, color="black", label="Stable envelope", zorder=5)
+    ax.axhline(0, color="#94A3B8", lw=0.7, ls=":", zorder=2)
+    ax.axvline(fermi_ref, color="#F59E0B", lw=1.3, ls="-.",
+               label=f"E$_F$ = {fermi_ref:.3f} eV", zorder=4)
+
+    _draw_band_edges(ax, gap, x_lo, x_hi)
+
+    # Mark only stable CTLs
+    ctl_count = 0
+    for ctl in sorted(res["stable_ctls"], key=lambda x: x["E_F_CTL"]):
+        ef_ctl = ctl["E_F_CTL"]
+        ax.axvline(ef_ctl, color="#94A3B8", lw=0.9, ls=":", zorder=3)
+        y_pos = 0.95 - 0.09 * ctl_count
+        ax.text(ef_ctl, y_pos,
+                f"$\\varepsilon$({ctl['q1']:+d}/{ctl['q2']:+d})\n"
+                f"{ef_ctl:.3f} eV",
+                transform=ax.get_xaxis_transform(),
+                ha="center", va="top", fontsize=7, color="#475569",
+                bbox=dict(fc="white", ec="none", alpha=0.75, pad=1))
+        ctl_count += 1
+
+    ax.set_xlim(x_lo, x_hi)
+    ax.set_xlabel("Fermi level relative to VBM  (eV)", fontsize=12)
+    ax.set_ylabel("Formation energy  (eV)", fontsize=12)
+    ax.set_title("Defect Formation Energy", fontsize=11, fontweight="bold")
+    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator())
+    ax.yaxis.set_minor_locator(ticker.AutoMinorLocator())
+    ax.grid(True, which="major", alpha=0.20, zorder=1)
+    ax.legend(fontsize=9, loc="best", framealpha=0.88)
+
+    ko_vals = [res["ko"][q]["E_KO"] for q in charges]
+    colors  = [_charge_color(q, charges) for q in charges]
+    x_pos   = np.arange(len(charges))
+    bars = ax2.bar(x_pos, ko_vals, color=colors, edgecolor="white",
+                   linewidth=0.8, width=0.55, zorder=3)
+    y_span = max(ko_vals) - min(ko_vals) if len(ko_vals) > 1 else 1.0
+    y_off  = 0.03 * abs(y_span) if y_span != 0 else 0.05
+    for bar, val in zip(bars, ko_vals):
+        va = "bottom" if val >= 0 else "top"
+        ax2.text(bar.get_x() + bar.get_width() / 2,
+                 val + (y_off if val >= 0 else -y_off),
+                 f"{val:+.3f}", ha="center", va=va,
+                 fontsize=8, color="#1E293B")
+    ax2.axhline(0, color="black", lw=0.8, zorder=2)
+    ax2.set_xticks(x_pos)
+    ax2.set_xticklabels([f"q = {q:+d}" for q in charges], fontsize=10)
+    ax2.set_ylabel("E$_{KO}$  (eV)", fontsize=11)
+    ax2.set_title("Kumagai-Oba Correction per Charge State", fontsize=11)
+    ax2.yaxis.set_minor_locator(ticker.AutoMinorLocator())
+    ax2.grid(True, axis="y", which="major", alpha=0.22, zorder=1)
+
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"[INFO] Per-defect plot saved to: {out_path}")
+    plt.close(fig)
+
+
+def plot_comparison(data, all_results, fermi_ref, out_path):
+    """
+    Comparison figure: stable envelopes of all defects overlaid.
+    Only the minimum-energy envelope per defect is drawn (no individual
+    charge-state curves) to keep the figure clean.
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as ticker
+    except ImportError:
+        print("[WARNING] matplotlib not installed. Skipping comparison plot.")
+        return
+
+    gap  = data["band_structure"]["cbm"] - data["band_structure"]["vbm"]
+    grid = all_results[0]["fermi_grid"]
+    x_lo, x_hi = grid[0], grid[-1]
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+
+    all_envelopes = []
+    for idx, res in enumerate(all_results):
+        color = _defect_color(idx)
+        ax.plot(grid, res["envelope"],
+                lw=2.4, ls="-", color=color, zorder=5,
+                label=res["name"])
+        all_envelopes.append(res["envelope"])
+        # D-4a: stable CTL vertical lines (thin, colour-matched)
+        for ctl in res["stable_ctls"]:
+            if 0 <= ctl["E_F_CTL"] <= gap:
+                ax.axvline(ctl["E_F_CTL"], color=color,
+                           lw=0.8, ls=":", alpha=0.55, zorder=3)
+
+    ax.axvline(fermi_ref, color="#F59E0B", lw=1.3, ls="-.",
+               label=f"E$_F$ = {fermi_ref:.3f} eV", zorder=6)
+    ax.axhline(0, color="#94A3B8", lw=0.7, ls=":", zorder=2)
+    _draw_band_edges(ax, gap, x_lo, x_hi)
+
+    # D-4b: auto-clip y-axis -- focus on the range covered by envelopes
+    #        within the sweep window, with a +/-15 % margin.
+    env_stack = np.vstack(all_envelopes)           # shape (n_defects, N_pts)
+    in_gap    = (grid >= 0) & (grid <= gap)
+    if in_gap.any():
+        ymin_data = env_stack[:, in_gap].min()
+        ymax_data = env_stack[:, in_gap].max()
+    else:
+        ymin_data, ymax_data = env_stack.min(), env_stack.max()
+    yspan = max(ymax_data - ymin_data, 1.0)
+    ax.set_ylim(ymin_data - 0.15 * yspan, ymax_data + 0.15 * yspan)
+
+    ax.set_xlim(x_lo, x_hi)
+    ax.set_xlabel("Fermi level relative to VBM  (eV)", fontsize=12)
+    ax.set_ylabel("Formation energy  (eV)", fontsize=12)
+    ax.set_title("Defect Formation Energy", fontsize=11, fontweight="bold")
+    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator())
+    ax.yaxis.set_minor_locator(ticker.AutoMinorLocator())
+    ax.grid(True, which="major", alpha=0.20, zorder=1)
+    ax.legend(fontsize=10, loc="best", framealpha=0.88)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"[INFO] Comparison plot saved to: {out_path}")
+    plt.close(fig)
+
+
+# ===========================================================================
+# CLI
+# ===========================================================================
+
+_DESC = textwrap.dedent("""\
+    Defect Formation Energy Calculator with Kumagai-Oba Finite-Size Correction
+    ===========================================================================
+    Computes the formation energy of point defects in semiconductors:
+
+      E_f(q, E_F) = (E_defect - E_bulk) - sum_i n_i*mu_i + q*(E_VBM + E_F) + E_KO
+
+    where E_KO is the Kumagai-Oba charge correction (PRB 89, 195205, 2014).
+    Multiple defect types and charge states are handled in a single run.
+""")
+
+_REQUIRED_DATA = textwrap.dedent("""\
+  +-------------------------------------------------------------------------+
+  |              REQUIRED INPUT DATA  (all supplied via YAML)               |
+  +--------------------------+----------------------------------------------+
+  | Section / Key            | Description                                  |
+  +--------------------------+----------------------------------------------+
+  | [bulk]                   |                                              |
+  |   formula                | Chemical formula of the host material        |
+  |   energy          [eV]   | DFT total energy of the perfect supercell    |
+  |   num_atoms              | Number of atoms in the bulk supercell        |
+  |   composition            | Atom counts  {species: N, ...}               |
+  +--------------------------+----------------------------------------------+
+  | [chemical_potentials]    | Deltamu_i = deviation from elemental reference    |
+  |   <species>       [eV]   | e.g.  Ga: 0.000  (Ga-rich: Deltamu_Ga = 0)      |
+  |                          | Constrained by host stability condition:     |
+  |                          |   sum_i x_i*mu_i = E[host] / f.u.             |
+  +--------------------------+----------------------------------------------+
+  | [elemental_references]   | DFT total energy per atom of elemental solid |
+  |   <species>    [eV/atom] | or molecule used as the chemical reference   |
+  |                          | e.g.  Ga: -3.031  (bulk alpha-Ga, PBE)         |
+  |                          |        N: -8.328  (1/2 E[N_2], PBE)           |
+  +--------------------------+----------------------------------------------+
+  | [band_structure]         |                                              |
+  |   vbm             [eV]   | Valence band maximum (absolute DFT value)    |
+  |   cbm             [eV]   | Conduction band minimum                      |
+  |   bandgap         [eV]   | Band gap (= cbm - vbm)                       |
+  |   fermi_level     [eV]   | Default reference Fermi level (absolute)     |
+  |                          | Note: scissors correction can be applied by  |
+  |                          |   setting cbm to the corrected value while   |
+  |                          |   keeping PBE total energies for E_defect    |
+  +--------------------------+----------------------------------------------+
+  | [dielectric]             |                                              |
+  |   tensor    [3x3, dim'less] Full static dielectric tensor (electronic  |
+  |                          | + ionic contributions).  Use the tensor from |
+  |                          | a bulk DFPT calculation.  Diagonal for cubic |
+  |                          | or hexagonal systems (off-diagonal = 0).     |
+  +--------------------------+----------------------------------------------+
+  | [supercell]              | Geometry of the defect supercell             |
+  |   lattice_vectors  [Ang]   | a, b, c vectors as 3-element lists          |
+  |   defect_position        | Fractional coordinates of the defect site    |
+  |                          | (Can be overridden per defect entry)         |
+  +--------------------------+----------------------------------------------+
+  | [defects]  (list)        | One entry per defect type                    |
+  |   name                   | Label string, e.g. "V_Ga"                   |
+  |   defect_type            | vacancy | interstitial | substitution        |
+  |   removed_atoms          | Species removed: {Ga: 1}  (vacancy)         |
+  |   added_atoms            | Species added:   {N: 1}   (interstitial)    |
+  |   [charge_states] (list) | One entry per charge state q                |
+  |     charge               | Integer charge q (negative = acceptor-like)  |
+  |     energy        [eV]   | DFT total energy of the defect supercell     |
+  |     num_atoms            | Number of atoms in the defect supercell      |
+  |     composition          | Atom counts (optional: auto-computed from    |
+  |                          | bulk + removed_atoms + added_atoms)          |
+  |     potential_alignment  |                                              |
+  |       delta_v     [eV]   | V_defect(far) - V_bulk(far): electrostatic  |
+  |                          | potential difference at sites far from the   |
+  |                          | defect, from DFT (e.g. VASP LOCPOT).        |
+  |                          | Set 0.0 for neutral state (q = 0).          |
+  +--------------------------+----------------------------------------------+
+
+  TIP -- obtaining delta_v from VASP:
+    Compute the planar-averaged electrostatic potential (LOCPOT) for both
+    the defect and bulk supercells, then take the difference in the region
+    far from the defect site (typically > ~6 Ang away).
+""")
+
+_OUTPUTS = textwrap.dedent("""\
+  OUTPUT FILES  (all written under --out-dir, default: current directory)
+  ------------
+    results.txt                    Full text report (all defects & charges)
+    ef_vs_ef/<name>_ef_vs_ef.txt   E_f(q, E_F) table + stable envelope
+    summary/<name>_summary.txt     KO correction breakdown + E_f at E_F_ref
+    ctls_summary.txt               Unified CTL table (stable + meta-stable)
+    plots/<name>_ef.png (with -p)  Per-defect 2-panel plot
+    plots/comparison_plot.png (-p) All defect envelopes overlaid
+""")
+
+_EXAMPLES = textwrap.dedent("""\
+  EXAMPLES
+  --------
+    # Minimal run (single-point report at E_F = VBM):
+    python defect_formation_energy.py -i input.yaml
+
+    # Set reference Fermi level and generate plots:
+    python defect_formation_energy.py -i input.yaml -f 1.5 -p
+
+    # Extend sweep below VBM and above CBM, all output to 'results/' dir:
+    python defect_formation_energy.py -i input.yaml -f -0.3 \\
+        --fermi-min -0.5 --fermi-max 4.0 -p --out-dir results/
+
+    # Dry-run: validate input only, no calculation:
+    python defect_formation_energy.py -i input.yaml --dry-run
+
+    # Verbose KO details:
+    python defect_formation_energy.py -i input.yaml -v
+
+  REFERENCES
+  ----------
+    [1] Y. Kumagai and F. Oba, Phys. Rev. B 89, 195205 (2014).
+        -- Finite-size correction method (KO correction)
+    [2] C. Freysoldt et al., Rev. Mod. Phys. 86, 253 (2014).
+        -- Comprehensive review of defect calculations
+    [3] J. L. Lyons and C. G. Van de Walle, npj Comp. Mat. 3, 12 (2017).
+        -- Example application for GaN point defects
+
+  DEPENDENCIES
+  ------------
+    Required : numpy, pyyaml
+    Optional : matplotlib  (needed only for --plot)
+    Install  : pip install numpy pyyaml matplotlib
+""")
+
+
+def parse_args():
+    p = argparse.ArgumentParser(
+        prog="defect_formation_energy.py",
+        description=_DESC,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_REQUIRED_DATA + _OUTPUTS + _EXAMPLES,
+        add_help=True,
+    )
+
+    # --- Input / output (B-3: unified --out-dir) ----------------------------
+    io_grp = p.add_argument_group("Input / Output")
+    io_grp.add_argument(
+        "-i", "--input",
+        required=True, metavar="FILE",
+        help="Path to the YAML input file (required).")
+    io_grp.add_argument(
+        "--out-dir",
+        default=".", dest="out_dir", metavar="DIR",
+        help=(
+            "Root directory for ALL output files.  Sub-directories "
+            "ef_vs_ef/, summary/, and plots/ are created automatically "
+            "inside this directory (default: current directory '.')."))
+    io_grp.add_argument(
+        "-o", "--output",
+        default="results.txt", metavar="FILE",
+        help=(
+            "Filename for the main plain-text report "
+            "(written inside --out-dir, default: results.txt)."))
+
+    # --- Fermi level ---------------------------------------------------------
+    ef_grp = p.add_argument_group("Fermi-level control")
+    ef_grp.add_argument(
+        "-f", "--fermi",
+        type=float, default=None, metavar="eV",
+        help=(
+            "Reference Fermi level relative to the VBM [eV].  "
+            "Negative values (below VBM) are fully supported.  "
+            "Overrides the 'fermi_level' field in the input file."))
+    ef_grp.add_argument(
+        "--fermi-min",
+        type=float, default=None, dest="fermi_min", metavar="eV",
+        help=(
+            "Lower bound of the Fermi-level sweep [eV, rel. VBM].  "
+            "Negative values extend the plot/table below the VBM.  "
+            "Default: auto = min(0, E_F_ref) - 10%% of band gap."))
+    ef_grp.add_argument(
+        "--fermi-max",
+        type=float, default=None, dest="fermi_max", metavar="eV",
+        help=(
+            "Upper bound of the Fermi-level sweep [eV, rel. VBM].  "
+            "Default: auto = max(gap, E_F_ref) + 10%% of band gap."))
+
+    # --- Plotting ------------------------------------------------------------
+    plt_grp = p.add_argument_group("Plotting  (requires matplotlib)")
+    plt_grp.add_argument(
+        "-p", "--plot",
+        action="store_true",
+        help=(
+            "Generate plots.  Produces one two-panel PNG per defect "
+            "(E_f vs E_F with stable CTL markers + E_KO bar chart) and "
+            "one comparison PNG with all defect envelopes overlaid."))
+    plt_grp.add_argument(
+        "--comparison-plot",
+        default="comparison_plot.png", dest="comparison_plot", metavar="FILE",
+        help=(
+            "Filename for the multi-defect comparison PNG "
+            "(written inside --out-dir/plots/, "
+            "default: comparison_plot.png)."))
+
+    # --- Diagnostics / utilities --------------------------------------------
+    diag_grp = p.add_argument_group("Diagnostics / Utilities")
+    diag_grp.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help=(
+            "Print intermediate Kumagai-Oba correction values "
+            "(E_real, E_recip, E_self, E_neut, eta, eps_avg, V) "
+            "for every charge state."))
+    diag_grp.add_argument(
+        "--dry-run",
+        action="store_true", dest="dry_run",
+        help=(
+            "Validate the input file and check chemical potential "
+            "consistency without performing any DFT energy calculations.  "
+            "Useful for catching input errors before a long run."))
+
+    return p.parse_args()
+
+
+# ===========================================================================
+# Main
+# ===========================================================================
+
+def main():
+    args = parse_args()
+
+    # ------------------------------------------------------------------ #
+    # 1. Load and validate input
+    # ------------------------------------------------------------------ #
+    print(f"[INFO] Loading: {args.input}")
+    data = load_input(args.input)
+
+    bs  = data["band_structure"]
+    vbm = bs["vbm"]
+    cbm = bs["cbm"]
+    gap = cbm - vbm
+
+    # (A-4) Chemical potential consistency check
+    print("[INFO] Checking chemical potential consistency ...")
+    check_chemical_potentials(data)
+
+    # ------------------------------------------------------------------ #
+    # 2. Fermi level and sweep grid  (C-2: built once, shared)
+    # ------------------------------------------------------------------ #
+    if args.fermi is not None:
+        fermi_ref = float(args.fermi)
+    else:
+        fermi_ref = bs["fermi_level"] - vbm
+    print(f"[INFO] Reference Fermi level (rel. VBM): {fermi_ref:.4f} eV")
+    if fermi_ref < 0:
+        print(f"[INFO]   -> {abs(fermi_ref):.4f} eV below the VBM.")
+    elif fermi_ref > gap:
+        print(f"[INFO]   -> {fermi_ref - gap:.4f} eV above the CBM.")
+
+    margin    = 0.10 * gap
+    fmin      = float(args.fermi_min) if args.fermi_min is not None \
+                else min(0.0, fermi_ref) - margin
+    fmax      = float(args.fermi_max) if args.fermi_max is not None \
+                else max(gap, fermi_ref) + margin
+    fermi_grid = np.linspace(fmin, fmax, N_FERMI_POINTS)
+    print(f"[INFO] Fermi sweep: [{fmin:.4f}, {fmax:.4f}] eV "
+          f"({N_FERMI_POINTS} points)")
+
+    # ------------------------------------------------------------------ #
+    # 3. Dry-run: stop here
+    # ------------------------------------------------------------------ #
+    if args.dry_run:
+        print("[INFO] --dry-run: input validation complete.  "
+              "No calculations performed.")
+        print(f"[INFO] Defects to be computed: "
+              f"{[d['name'] for d in data['defects']]}")
+        print(f"[INFO] Band gap: {gap:.4f} eV  |  "
+              f"Sweep: [{fmin:.4f}, {fmax:.4f}] eV")
+        return
+
+    # ------------------------------------------------------------------ #
+    # 4. Run calculations
+    # ------------------------------------------------------------------ #
+    print("[INFO] Computing KO corrections and formation energies ...")
+    all_results = run_all_defects(
+        data, fermi_ref, fermi_grid, verbose=args.verbose)
+
+    # ------------------------------------------------------------------ #
+    # 5. Output  (B-3: all under out_dir)
+    # ------------------------------------------------------------------ #
+    out = args.out_dir
+    _safe_mkdir(out)
+
+    # Text report
+    report_lines = format_report(data, all_results, fermi_ref)
+    print("\n" + "\n".join(report_lines))
+    write_text(_out(out, args.output), report_lines)
+
+    # Per-defect tables
+    for res in all_results:
+        tag = res["name"].replace(" ", "_")
+        write_ef_table(
+            _out(out, "ef_vs_ef", f"{tag}_ef_vs_ef.txt"),
+            res["name"], res["fermi_grid"],
+            res["ef_by_charge"], res["envelope"])
+        summary_rows = [
+            dict(q=q, E_KO=res["ko"][q]["E_KO"],
+                 E_real=res["ko"][q]["E_real"],
+                 E_recip=res["ko"][q]["E_recip"],
+                 E_self_ewald=res["ko"][q]["E_self_ewald"],
+                 E_neutralize=res["ko"][q]["E_neutralize"],
+                 E_lat=res["ko"][q]["E_lat"],
+                 E_alignment=res["ko"][q]["E_alignment"],
+                 Ef_at_fermi=res["ef_at_fermi"][q])
+            for q in res["charges"]
+        ]
+        write_summary_txt(
+            _out(out, "summary", f"{tag}_summary.txt"),
+            res["name"], summary_rows, fermi_ref)
+
+    # Unified CTL summary (B-2)
+    write_ctls_summary(_out(out, "ctls_summary.txt"), all_results, gap)
+
+    # Plots
+    if args.plot:
+        for res in all_results:
+            tag = res["name"].replace(" ", "_")
+            plot_single_defect(
+                data, res, fermi_ref,
+                _out(out, "plots", f"{tag}_ef.png"))
+        plot_comparison(
+            data, all_results, fermi_ref,
+            _out(out, "plots", args.comparison_plot))
+
+
+if __name__ == "__main__":
+    main()

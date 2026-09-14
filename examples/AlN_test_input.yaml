@@ -1,0 +1,152 @@
+# =============================================================================
+# AlN test-calculation input for ikazuchix -- V_Al (triple acceptor) and O_N
+# (the classic unintentional oxygen-on-nitrogen donor) in wurtzite AlN.
+#
+# HOW TO USE THIS FILE
+# ---------------------
+# Every ENERGY value below (bulk/defect total energies, elemental
+# references, delta_v) is a PLACEHOLDER chosen only to produce a
+# plausible-looking, self-consistent test run -- it is NOT from a real
+# VASP calculation. Structural values (lattice constants, internal
+# parameter u, band gap) ARE real literature values; see the citation
+# table in this session's chat reply for sources and confidence levels.
+# Replace every "PLACEHOLDER" energy with your own VASP output before
+# drawing any physical conclusion from this file's results.
+#
+# Supercell convention: 3x3x2 repetition of the 4-atom wurtzite
+# conventional (hexagonal) cell -> 72 atoms (36 Al + 36 N), the same
+# convention as examples/GaN_test_input.yaml. Structural parameters:
+#   a = 3.112 Ang, c = 4.982 Ang (Schulz & Thiemann, Solid State
+#       Commun. 23, 815 (1977) -- companion measurement to their GaN
+#       paper; consistent with a=3.110-3.113, c=4.978-4.982 reported
+#       elsewhere)
+#   u = 0.3821 (same reference) -- anion basis (1/3, 2/3, u)
+# =============================================================================
+
+bulk:
+  formula: AlN
+  energy: -498.204          # eV -- PLACEHOLDER: DFT total energy of the 72-atom bulk supercell
+  num_atoms: 72
+  composition: {Al: 36, N: 36}
+
+# Elemental references (see GaN_test_input.yaml for the general
+# reasoning). Al: bulk fcc metal (Fm-3m). N: 1/2 E(N2), same caveats as
+# the GaN file -- in a real project, compute this ONCE per
+# ENCUT/pseudopotential/code combination and reuse it consistently
+# across both the GaN and AlN inputs of that project (do not literally
+# copy the number from a different project's settings).
+elemental_references:
+  Al: -3.748      # eV/atom -- PLACEHOLDER (order-of-magnitude only)
+  N: -8.328       # eV/atom -- PLACEHOLDER (order-of-magnitude only; must match your own N2 reference, not necessarily this number)
+  O: -4.948       # eV/atom -- PLACEHOLDER: 1/2 E(O2 molecule), spin-polarized triplet ground state (O2 is NOT closed-shell like N2 -- do not forget ISPIN=2 for this one reference calculation)
+
+# Al-rich / N-poor growth limit (Delta_mu_Al = 0). Delta_mu_O is set by
+# an O2 reservoir at the O-rich limit (Delta_mu_O = 0), deliberately
+# chosen to illustrate the worst case for O_N contamination -- an
+# oxygen-exposed growth/sintering environment, which is the physically
+# realistic scenario this defect is famous for (AlN is notoriously
+# oxygen-gettering). Tighten Delta_mu_O (more negative) to model a
+# cleaner, oxygen-poor environment instead.
+chemical_potentials:
+  Al: 0.000       # Al-rich limit
+  N: -1.763000    # PLACEHOLDER -- solved exactly from bulk.energy above so Check 1 (host stability) passes with zero residual; recompute from YOUR bulk.energy once real
+  O: 0.000        # O-rich limit (worst case for O_N contamination)
+
+band_structure:
+  vbm: -2.700           # eV -- PLACEHOLDER: absolute VBM (raw DFT eigenvalue reference)
+  cbm: 3.500             # eV -- vbm + 6.2 (experimental AlN gap, see bandgap below)
+  bandgap: 6.2            # eV -- experimental wurtzite AlN gap, room temperature (commonly cited range 6.1-6.28 eV; e.g. Vurgaftman & Meyer, J. Appl. Phys. 94, 3675 (2003) give 6.25 eV at 0 K). Confidence: medium (real value has non-trivial reported spread across sources/samples)
+  fermi_level: -0.400      # eV -- PLACEHOLDER default reference E_F (absolute); override per run with -f
+  # Effective masses for --solve-fermi (dimensionless, x m0):
+  #   m_e*: 0.32 (isotropic approx. of 0.30||c / 0.32 perp c)
+  #   m_h*: 3.0  (heavy-hole band value, used as a DOS-hole-mass proxy)
+  # Source: Rodina et al., Phys. Status Solidi B 234, 787 (2002)
+  # [effective electronic masses in wurtzite/zinc-blende GaN and AlN
+  # from k.p theory]. Confidence: m_e medium, m_h LOW/UNCERTAIN -- AlN's
+  # valence-band ordering is inverted relative to GaN (negative crystal-
+  # field splitting), so a single scalar heavy-hole mass is a cruder
+  # stand-in here than for GaN; verify against your own band structure
+  # (or a literature DOS effective mass) before trusting equilibrium
+  # hole concentrations quantitatively.
+  effective_mass_e: 0.32
+  effective_mass_h: 3.00
+
+dielectric:
+  # Static dielectric tensor from a bulk DFPT run (see
+  # GaN_test_input.yaml for the VASP settings). Values below
+  # (eps_perp=8.5, eps_parallel=9.1) follow the same ~5-10% in-plane/
+  # c-axis anisotropy pattern documented for GaN, anchored to the
+  # commonly-tabulated AlN static value of ~8.5 (e.g. TU Wien
+  # semiconductor parameter database). CONFIDENCE: LOW/UNCERTAIN for the
+  # anisotropic split specifically -- the perpendicular value (8.5) is
+  # well attested, but the parallel component was not independently
+  # confirmed with a strong single source during this session; treat
+  # eps_parallel as a placeholder in particular and prioritize your own
+  # DFPT tensor over this one.
+  tensor:
+    - [8.5, 0.0, 0.0]
+    - [0.0, 8.5, 0.0]
+    - [0.0, 0.0, 9.1]
+
+# Shared default supercell -- 3x3x2 repetition of the wurtzite
+# conventional cell (see header comment for a, c, u).
+supercell:
+  lattice_vectors:
+    a: [9.3360, 0.0000, 0.0000]
+    b: [-4.6680, 8.0852, 0.0000]
+    c: [0.0000, 0.0000, 9.9640]
+  # Cation (Al) site nearest the supercell centre -- used by V_Al below.
+  # O_N overrides this with the anion (N) site it substitutes onto.
+  defect_position: [0.444444, 0.555556, 0.000000]
+
+defects:
+  # ---------------------------------------------------------------------
+  # V_Al: Al vacancy, a deep triple acceptor -- generally reported as
+  # even deeper/more localized than V_Ga in GaN, consistent with AlN's
+  # larger gap and stronger ionicity. Charge states 0/-1/-2/-3.
+  # ---------------------------------------------------------------------
+  - name: V_Al
+    defect_type: vacancy
+    removed_atoms: {Al: 1}
+    charge_states:
+      - charge: 0
+        energy: -483.456        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL ladder; see chat reply)
+        potential_alignment: {delta_v: 0.00}
+        degeneracy: 1
+      - charge: -1
+        energy: -486.858        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL ladder; see chat reply)
+        potential_alignment: {delta_v: -0.052}  # eV -- PLACEHOLDER
+        degeneracy: 2
+      - charge: -2
+        energy: -493.150        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL ladder; see chat reply)
+        potential_alignment: {delta_v: -0.097}
+        degeneracy: 1
+      - charge: -3
+        energy: -502.321        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL ladder; see chat reply)
+        potential_alignment: {delta_v: -0.138}
+        degeneracy: 4
+
+  # ---------------------------------------------------------------------
+  # O_N: oxygen substituting nitrogen -- the textbook unintentional
+  # donor in AlN (e.g. Nam et al., Appl. Phys. Lett. 83, 878 (2003);
+  # Mehnke et al., J. Appl. Phys. 120, 145702 (2016)), responsible for
+  # much of the persistent, hard-to-avoid n-type background conductivity
+  # seen in as-grown AlN. Charge states 0/+1 (single donor).
+  # ---------------------------------------------------------------------
+  - name: O_N
+    defect_type: substitution
+    removed_atoms: {N: 1}
+    added_atoms: {O: 1}
+    supercell:
+      lattice_vectors:
+        a: [9.3360, 0.0000, 0.0000]
+        b: [-4.6680, 8.0852, 0.0000]
+        c: [0.0000, 0.0000, 9.9640]
+      defect_position: [0.444444, 0.555556, 0.191050]   # anion (N) site being replaced, u=0.3821
+    charge_states:
+      - charge: 0
+        energy: -491.561        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL; see chat reply)
+        potential_alignment: {delta_v: 0.00}
+      - charge: 1
+        energy: -492.049        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL; low formation energy at the O-rich limit is the point of this example)
+        potential_alignment: {delta_v: 0.038}   # eV -- PLACEHOLDER

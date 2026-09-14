@@ -1,0 +1,16 @@
+# Charge-State Transition Level (CTL) summary -- all defects
+# Method: Kumagai-Oba corrected
+#
+# on_envelope : 'yes' = CTL lies within the band gap [0, gap] AND
+#               represents an adjacency on the stable envelope.
+#               'no'  = intersection outside the gap or between
+#               charge states that are not envelope-adjacent.
+#
+------------------------------------------------------------------------
+      Defect     q1     q2     E_F_CTL[eV]      Ef_CTL[eV]   on_envelope
+------------------------------------------------------------------------
+        V_Ga     -1     +0         +0.5000         +5.5000           yes
+        V_Ga     -2     -1         +1.2000         +4.8000           yes
+        V_Ga     -2     +0         +0.8500         +5.5000            no
+         V_N     +0     +1         +1.0000         +4.0000           yes
+------------------------------------------------------------------------

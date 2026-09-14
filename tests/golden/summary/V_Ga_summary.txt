@@ -1,0 +1,21 @@
+# Defect formation energy summary  [V_Ga]
+# Method: Kumagai-Oba corrected
+# Fermi level reference : 0.8500 eV (relative to VBM; negative = below VBM)
+#
+# q       : Charge state (electrons; negative = acceptor-like)
+# E_KO    : Total Kumagai-Oba finite-size correction (eV)
+# E_real  : Real-space Ewald sum (eV)
+# E_recip : Reciprocal-space Ewald sum (eV)
+# E_self  : Ewald Gaussian self-energy (eV)
+# E_neut  : Jellium background neutralization (eV)
+# E_lat   : Lattice energy = E_real+E_recip+E_self+E_neut (eV)
+# E_align : Potential alignment = q * delta_V (eV)
+# Ef      : Formation energy at the reference Fermi level (eV)
+#
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    q            E_KO[eV]          E_real[eV]         E_recip[eV]          E_self[eV]          E_neut[eV]           E_lat[eV]         E_align[eV]  Ef(EF=0.850eV)[eV]
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+   -2           +8.683594           +2.370700           +6.926766           -0.200320           -0.313551           +8.783594           -0.100000           +5.499994
+   -1           +2.175899           +0.592675           +1.731691           -0.050080           -0.078388           +2.195899           -0.020000           +5.149999
+   +0           +0.000000           +0.000000           +0.000000           +0.000000           +0.000000           +0.000000           +0.000000           +5.500000
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------

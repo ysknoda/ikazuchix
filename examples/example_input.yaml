@@ -1,0 +1,103 @@
+# Synthetic example input for defect_formation_energy.py
+# =========================================================
+# Illustrative wurtzite-GaN-like point-defect dataset (V_Ga, V_N).
+# All numbers below are self-consistent and representative in order of
+# magnitude, but are a synthetic regression-test fixture -- NOT a
+# validated DFT dataset from an actual VASP calculation. Substitute your
+# own VASP-derived numbers for real production use.
+#
+# This file exercises:
+#   - the modern multi-defect 'defects' list format
+#   - composition auto-completion (no 'composition' key given per charge state)
+#   - an anisotropic dielectric tensor (eps_perp != eps_parallel)
+#   - a per-defect 'supercell' override (V_N) alongside the top-level
+#     default (used by V_Ga)
+#   - a multi-charge acceptor series with several CTLs inside the gap (V_Ga)
+#   - a simple donor level (V_N)
+#   - a deliberate delta_v=0.0 with q!=0 case (V_N, q=+1) to exercise the
+#     "[WARNING] ... delta_v=0.0; KO alignment term is zero" code path
+#   - optional --solve-fermi fields (effective_mass_e/h, one illustrative
+#     'degeneracy'): both defects are simple single-species vacancies, so
+#     their site densities are auto-derived from removed_atoms -- no
+#     explicit 'site_density' is needed for this file.
+#
+# All of the above are read only by opt-in flags (-p/--plot,
+# --adaptive-ewald, --solve-fermi, --stability-diagram, ...); the default
+# `ikazuchix -i example_input.yaml` invocation ignores them entirely.
+
+bulk:
+  formula: GaN
+  energy: -462.924          # eV, total DFT energy of the 72-atom bulk supercell
+  num_atoms: 72
+  composition: {Ga: 36, N: 36}
+
+elemental_references:
+  Ga: -3.031      # eV/atom, bulk alpha-Ga (PBE)
+  N: -8.328       # eV/atom, 1/2 E[N2] (PBE)
+
+chemical_potentials:
+  # Ga-rich / N-poor limit
+  Ga: 0.000
+  N: -1.500
+
+band_structure:
+  vbm: 5.0000
+  cbm: 6.7000
+  bandgap: 1.7000
+  fermi_level: 5.8500
+  # Optional, used only by --solve-fermi (order-of-magnitude illustrative
+  # GaN-like values, e.g. Lyons & Van de Walle, npj Comput. Mater. 3, 12
+  # (2017)); omit both to fall back to the free-electron default (1.0).
+  effective_mass_e: 0.20
+  effective_mass_h: 1.00
+
+dielectric:
+  tensor:
+    - [9.50, 0.00, 0.00]
+    - [0.00, 9.50, 0.00]
+    - [0.00, 0.00, 10.40]
+
+supercell:
+  lattice_vectors:
+    a: [9.5700, 0.0000, 0.0000]
+    b: [-4.7850, 8.2877, 0.0000]
+    c: [0.0000, 0.0000, 10.3800]
+  defect_position: [0.16667, 0.33333, 0.00]
+
+defects:
+  - name: V_Ga
+    defect_type: vacancy
+    removed_atoms: {Ga: 1}
+    charge_states:
+      - charge: 0
+        energy: -454.3930
+        num_atoms: 71
+        potential_alignment: {delta_v: 0.000}
+      - charge: -1
+        energy: -451.0689
+        num_atoms: 71
+        potential_alignment: {delta_v: 0.020}
+      - charge: -2
+        energy: -451.3766
+        num_atoms: 71
+        potential_alignment: {delta_v: 0.050}
+        degeneracy: 2  # optional, used only by --solve-fermi; illustrative
+
+  - name: V_N
+    defect_type: vacancy
+    removed_atoms: {N: 1}
+    supercell:
+      lattice_vectors:
+        a: [9.5700, 0.0000, 0.0000]
+        b: [-4.7850, 8.2877, 0.0000]
+        c: [0.0000, 0.0000, 10.3800]
+      defect_position: [0.16667, 0.33333, 0.38]
+    charge_states:
+      - charge: 0
+        energy: -449.0960
+        num_atoms: 71
+        potential_alignment: {delta_v: 0.000}
+      - charge: 1
+        energy: -457.2919
+        num_atoms: 71
+        potential_alignment: {delta_v: 0.000}

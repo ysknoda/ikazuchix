@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ikazuchix"
+version = "0.1.0a1"
+description = "Defect formation energy calculator for semiconductors with the Kumagai-Oba finite-size charge correction"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Yusuke Noda"},
+]
+keywords = [
+    "materials-science",
+    "defect-formation-energy",
+    "point-defects",
+    "semiconductors",
+    "kumagai-oba",
+    "finite-size-correction",
+    "ewald-summation",
+    "dft",
+    "vasp",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+
+# Core dependencies -- the CLI runs fully with just these two installed.
+dependencies = [
+    "numpy>=1.20",
+    "PyYAML>=5.1",
+]
+
+[project.optional-dependencies]
+# Enables -p/--plot (per-defect and comparison PNG figures). Without
+# it: plotting is silently skipped with a one-line [WARNING].
+plot = ["matplotlib>=3.3"]
+# JIT-compiles the Ewald real-/reciprocal-space summation kernels for a
+# large speedup (see benchmarks/bench_numba.py). Without it: the exact
+# same Python source runs un-compiled -- identical results, just slower.
+fast = ["numba>=0.55"]
+# Distributes the (defect, charge_state) work list across MPI ranks
+# under `mpirun -n N ikazuchix ...` (see benchmarks/bench_mpi.py).
+# Without it, or without --no-mpi: falls back to a single process
+# automatically -- identical results, just slower. mpi4py alone is NOT
+# sufficient for actual multi-rank execution: it also needs a system
+# MPI runtime (OpenMPI or MPICH) providing libmpi.dylib/.so, which is
+# not a pip-installable Python package -- see README.md.
+mpi = ["mpi4py>=3.1"]
+all = ["ikazuchix[plot,fast,mpi]"]
+# Only needed to run the test suite (tests/) -- not required by end users.
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+ikazuchix = "ikazuchix.main:main"
+
+[project.urls]
+Homepage = "https://github.com/ysknoda/ikazuchix"
+Repository = "https://github.com/ysknoda/ikazuchix"
+
+[tool.setuptools.packages.find]
+include = ["ikazuchix", "ikazuchix.*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,57 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core:
+    # Enforces the "must fully work with only the minimal dependency
+    # set" requirement on every PR, rather than that being a one-time
+    # manual check: no matplotlib, no numba, no mpi4py installed here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: pytest -v
+
+  full:
+    # Adds the optional extras via pip. mpi4py's package install
+    # succeeds here even without a system MPI runtime (see
+    # pyproject.toml's [project.optional-dependencies].mpi comment), so
+    # this job also covers the "mpi4py installed but its native MPI
+    # library can't be loaded" fallback path -- the exact situation
+    # found on this project's own dev machine before OpenMPI was
+    # installed there.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[all,dev]"
+      - run: pytest -v
+
+  mpi:
+    # Installs a real MPI runtime so the mpirun-based tests
+    # (tests/test_mpi_consistency.py) actually exercise multi-rank
+    # execution rather than skipping. Marked non-blocking: whether the
+    # default Ubuntu runner's root/non-root user setup needs
+    # `--allow-run-as-root` for OpenMPI's mpirun was not verified while
+    # authoring this workflow (no live GitHub Actions runner available)
+    # -- treat a failure here as a signal to check that, not as a
+    # correctness regression in the package itself.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: sudo apt-get update && sudo apt-get install -y openmpi-bin libopenmpi-dev
+      - run: pip install -e ".[all,dev]"
+      - run: pytest tests/test_mpi_consistency.py -v

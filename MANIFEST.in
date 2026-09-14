@@ -1,0 +1,15 @@
+# Files the sdist needs beyond the package itself. setuptools already
+# picks up every *.py (so tests/*.py ship by default), but not the data
+# those tests depend on -- without the two recursive-include lines below
+# the sdist carries a test suite that cannot run, since conftest.py
+# resolves EXAMPLE_INPUT to examples/example_input.yaml and the golden
+# regression tests read tests/golden/*.txt.
+include LICENSE
+include README.md
+recursive-include examples *.yaml
+recursive-include tests *.py
+recursive-include tests/golden *.txt *.log
+
+# tests/golden/plots/*.png are reference images for human inspection
+# only -- no test reads them -- so they stay out of the sdist (288 KB).
+prune tests/golden/plots
