@@ -7,6 +7,22 @@ import warnings
 # Chemical potential helpers  (A-4: consistency check added)
 # ===========================================================================
 
+def host_formation_reference(data):
+    """(energy, composition) of the host used for its formation enthalpy.
+
+    'bulk.formation_reference' (optional; a k-converged host calculation
+    in any cell with the host's stoichiometry -- docs/adr/0007) takes
+    precedence; otherwise the defect-supercell 'bulk.energy' and
+    'bulk.composition' are used, exactly as before. 'bulk.energy' itself
+    always remains the reference for E_def - E_bulk.
+    """
+    bulk = data["bulk"]
+    ref = bulk.get("formation_reference")
+    if ref:
+        return float(ref["energy"]), dict(ref["composition"])
+    return float(bulk["energy"]), dict(bulk["composition"])
+
+
 def check_chemical_potentials(data):
     """
     Verify that the supplied chemical potentials satisfy the host
@@ -27,15 +43,16 @@ def check_chemical_potentials(data):
     refs      = data["elemental_references"]
     deltas    = data["chemical_potentials"]
     bulk      = data["bulk"]
-    comp      = bulk["composition"]
+    # Checks 1 and 3 compare against the host's formation reference
+    # (bulk.formation_reference if given, else the bulk supercell).
+    total_e_bulk, comp = host_formation_reference(data)
     n_atoms   = sum(comp.values())
-    total_e_bulk = float(bulk["energy"])
 
     # Check 0: every species referenced anywhere (bulk + all defect
     # charge-state compositions) must have both an elemental reference
     # and a chemical potential entry; a missing entry otherwise defaults
     # silently to 0.0 in the formulas below and in chem_pot_correction().
-    all_species = set(comp)
+    all_species = set(bulk["composition"])
     for d in data.get("defects", []):
         for cs in d.get("charge_states", []):
             all_species |= set(cs.get("composition", {}) or {})

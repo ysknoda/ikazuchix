@@ -26,13 +26,19 @@ region lives in too many dimensions to usefully enumerate as a polygon
 here, so only the direct point check is offered (task scope).
 """
 
-from ikazuchix.chem_potentials import competing_phase_bound
+from ikazuchix.chem_potentials import competing_phase_bound, host_formation_reference
+from ikazuchix.constants import ATOMIC_NUMBER
 
 
 def free_species_order(host_composition):
     """Deterministic species ordering used throughout this module (and
-    as the default axis assignment for feasible_region_2d)."""
-    return sorted(host_composition)
+    as the default axis assignment for feasible_region_2d): by atomic
+    number, so the first two (lightest) species become the plot's x/y
+    axes and the heaviest is eliminated via the host equality. Labels
+    that are not element symbols sort after all elements, alphabetically."""
+    return sorted(host_composition,
+                  key=lambda sp: (0, ATOMIC_NUMBER[sp], sp) if sp in ATOMIC_NUMBER
+                  else (1, 0, sp))
 
 
 def _host_dH_f(bulk_energy, host_composition, elemental_references):
@@ -190,12 +196,12 @@ def stability_summary(data, tol=1e-6):
     dH_f_host, n_competing_phases, and -- only when the host has
     exactly 3 species -- region_species_x/y/z and region_vertices.
     """
-    comp   = data["bulk"]["composition"]
+    host_energy, comp = host_formation_reference(data)
     refs   = data["elemental_references"]
     deltas = data["chemical_potentials"]
     competing_phases = data.get("competing_phases") or []
 
-    dH_f_host = _host_dH_f(data["bulk"]["energy"], comp, refs)
+    dH_f_host = _host_dH_f(host_energy, comp, refs)
     feasible, violations = is_feasible_point(
         deltas, comp, refs, dH_f_host, competing_phases, tol=tol)
 

@@ -299,6 +299,8 @@ def _validate_nested_required_keys(raw):
         raise ValueError(
             f"'bulk.energy' must be a numeric value "
             f"(got {raw['bulk']['energy']!r}).")
+    _validate_formation_reference(raw["bulk"])
+
     if "formula" not in raw["bulk"]:
         raise KeyError("'bulk' is missing required key 'formula'.")
     formula = raw["bulk"]["formula"]
@@ -354,6 +356,40 @@ def _validate_nested_required_keys(raw):
             raise ValueError(
                 f"{context}: 'composition' must be a non-empty mapping "
                 "of {species: count, ...}.")
+
+
+def _validate_formation_reference(bulk):
+    """Optional 'bulk.formation_reference' {energy, composition}
+    (docs/adr/0007): must describe the same species in the same
+    stoichiometric ratios as 'bulk.composition' (1e-6 relative), since a
+    different stoichiometry would silently produce a wrong dH_f."""
+    ref = bulk.get("formation_reference")
+    if ref is None:
+        return
+    context = "'bulk.formation_reference'"
+    if not isinstance(ref, dict):
+        raise ValueError(f"{context} must be a mapping with 'energy' and 'composition'.")
+    for key in ("energy", "composition"):
+        if key not in ref:
+            raise KeyError(f"{context} is missing required key '{key}'.")
+    if not _is_number(ref["energy"]):
+        raise ValueError(f"{context}: 'energy' must be numeric (got {ref['energy']!r}).")
+    comp = ref["composition"]
+    if not isinstance(comp, dict) or not comp:
+        raise ValueError(f"{context}: 'composition' must be a non-empty mapping.")
+    _validate_composition_values(comp, f"{context} composition")
+    host = {sp: n for sp, n in bulk["composition"].items() if n}
+    ref_nz = {sp: n for sp, n in comp.items() if n}
+    if set(host) != set(ref_nz):
+        raise ValueError(
+            f"{context}: species {sorted(ref_nz)} differ from "
+            f"'bulk.composition' species {sorted(host)}.")
+    scale = sum(ref_nz.values()) / sum(host.values())
+    for sp in sorted(host):
+        if abs(ref_nz[sp] - scale * host[sp]) > 1e-6 * max(1.0, ref_nz[sp]):
+            raise ValueError(
+                f"{context}: composition {ref_nz} does not have the same "
+                f"stoichiometry as 'bulk.composition' {host}.")
 
 
 def _validate_supercell_block(sc, context):

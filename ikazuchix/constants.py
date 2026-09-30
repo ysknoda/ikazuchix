@@ -17,3 +17,21 @@ BOLTZMANN_EV_PER_K = 8.617333262e-5    # k_B [eV/K] (k_B[J/K] / elementary charg
 
 N_FERMI_POINTS = 400  # Fermi-level grid density
 EWALD_CONV_TOL = 1e-6  # convergence threshold for Ewald sum shell check (eV)
+
+# Element symbols in atomic-number order (index + 1 = Z), used to order
+# species axes by atomic number (ikazuchix.stability_region).
+ELEMENT_SYMBOLS = (
+    "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",
+    "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca",
+    "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+    "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr",
+    "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",
+    "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
+    "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb",
+    "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg",
+    "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th",
+    "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es", "Fm",
+    "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds",
+    "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
+)
+ATOMIC_NUMBER = {sym: z for z, sym in enumerate(ELEMENT_SYMBOLS, start=1)}

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Optional `bulk.formation_reference: {energy, composition}` holds a k-converged host energy for the host formation enthalpy: the host-stability checks and `--stability-diagram`. The defect-supercell `bulk.energy` stays the reference for `E_def - E_bulk`. A stoichiometry mismatch with `bulk.composition` is an input error. See `docs/adr/0007`.
+
+### Changed
+
+- The stability-region axes are ordered by atomic number, not alphabetically. For MgAl2O4 the x and y axes are `O` and `Mg`, and `Al` is eliminated. Labels that are not element symbols sort last.
+
 ## 0.1.0a2 — 2026-09-30
 
 ### Fixed (breaking: results change)
