@@ -25,7 +25,7 @@ from ikazuchix.io_utils import load_input
 try:
     __version__ = importlib.metadata.version("ikazuchix")
 except importlib.metadata.PackageNotFoundError:
-    __version__ = "0.1.0a1"  # not installed (e.g. run from a source checkout)
+    __version__ = "0.1.0a2"  # not installed (e.g. run from a source checkout)
 
 __all__ = [
     "__version__",

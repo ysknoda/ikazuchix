@@ -190,6 +190,7 @@ def main():
                  E_recip=res["ko"][q]["E_recip"],
                  E_self_ewald=res["ko"][q]["E_self_ewald"],
                  E_neutralize=res["ko"][q]["E_neutralize"],
+                 E_PC=res["ko"][q]["E_PC"],
                  E_lat=res["ko"][q]["E_lat"],
                  E_alignment=res["ko"][q]["E_alignment"],
                  Ef_at_fermi=res["ef_at_fermi"][q])

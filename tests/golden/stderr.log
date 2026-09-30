@@ -1,8 +1,0 @@
-/Users/yusuke/Claude_Code/defect_formation_energy/defect_formation_energy.py:813: RuntimeWarning: [KO real-space] Outermost shell contribution (2.67e-02 eV) exceeds tolerance 1e-06 eV.  Consider increasing real_cutoff (current: 3).
-  run_one_defect(d, data, fermi_ref, fermi_grid, verbose=verbose)
-/Users/yusuke/Claude_Code/defect_formation_energy/defect_formation_energy.py:813: RuntimeWarning: [KO recip-space] Outermost shell contribution (5.82e-02 eV) exceeds tolerance 1e-06 eV.  Consider increasing recip_cutoff (current: 3).
-  run_one_defect(d, data, fermi_ref, fermi_grid, verbose=verbose)
-/Users/yusuke/Claude_Code/defect_formation_energy/defect_formation_energy.py:813: RuntimeWarning: [KO real-space] Outermost shell contribution (1.07e-01 eV) exceeds tolerance 1e-06 eV.  Consider increasing real_cutoff (current: 3).
-  run_one_defect(d, data, fermi_ref, fermi_grid, verbose=verbose)
-/Users/yusuke/Claude_Code/defect_formation_energy/defect_formation_energy.py:813: RuntimeWarning: [KO recip-space] Outermost shell contribution (2.33e-01 eV) exceeds tolerance 1e-06 eV.  Consider increasing recip_cutoff (current: 3).
-  run_one_defect(d, data, fermi_ref, fermi_grid, verbose=verbose)

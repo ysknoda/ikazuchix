@@ -490,7 +490,7 @@ def write_summary_txt(path, defect_name, summary_rows, fermi_ref):
     """Write per-charge KO breakdown + E_f as a plain-text table."""
     col_labels = [
         "q", "E_KO[eV]", "E_real[eV]", "E_recip[eV]",
-        "E_self[eV]", "E_neut[eV]", "E_lat[eV]",
+        "E_self[eV]", "E_neut[eV]", "E_PC[eV]", "E_lat[eV]",
         "E_align[eV]", f"Ef(EF={fermi_ref:.3f}eV)[eV]",
     ]
     COL_W_Q = 5
@@ -511,12 +511,13 @@ def write_summary_txt(path, defect_name, summary_rows, fermi_ref):
         "(relative to VBM; negative = below VBM)",
         "#",
         "# q       : Charge state (electrons; negative = acceptor-like)",
-        "# E_KO    : Total Kumagai-Oba finite-size correction (eV)",
+        "# E_KO    : Total Kumagai-Oba finite-size correction = E_lat + E_align (eV)",
         "# E_real  : Real-space Ewald sum (eV)",
         "# E_recip : Reciprocal-space Ewald sum (eV)",
         "# E_self  : Ewald Gaussian self-energy (eV)",
         "# E_neut  : Jellium background neutralization (eV)",
-        "# E_lat   : Lattice energy = E_real+E_recip+E_self+E_neut (eV)",
+        "# E_PC    : Point-charge lattice energy = E_real+E_recip+E_self+E_neut (eV)",
+        "# E_lat   : Lattice correction = -E_PC (eV)",
         "# E_align : Potential alignment = q * delta_V (eV)",
         "# Ef      : Formation energy at the reference Fermi level (eV)",
         "#",
@@ -527,7 +528,8 @@ def write_summary_txt(path, defect_name, summary_rows, fermi_ref):
             f"{row['q']:+d}",
             f"{row['E_KO']:+.6f}", f"{row['E_real']:+.6f}",
             f"{row['E_recip']:+.6f}", f"{row['E_self_ewald']:+.6f}",
-            f"{row['E_neutralize']:+.6f}", f"{row['E_lat']:+.6f}",
+            f"{row['E_neutralize']:+.6f}", f"{row['E_PC']:+.6f}",
+            f"{row['E_lat']:+.6f}",
             f"{row['E_alignment']:+.6f}", f"{row['Ef_at_fermi']:+.6f}",
         ]
         lines.append(row_str(vals))

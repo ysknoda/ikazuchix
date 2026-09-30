@@ -241,7 +241,7 @@ def parse_args():
         type=float, default=None, dest="ewald_eta", metavar="Ang^-1",
         help=(
             "Ewald splitting parameter eta [Ang^-1].  "
-            "Default: auto = sqrt(pi) / V^(1/3)."))
+            "Default: auto = sqrt(pi * eps_avg) / V^(1/3), eps_avg = tr(eps)/3."))
     ewald_grp.add_argument(
         "--adaptive-ewald",
         action="store_true", dest="adaptive_ewald",
@@ -351,7 +351,7 @@ def parse_args():
         action="store_true",
         help=(
             "Print intermediate Kumagai-Oba correction values "
-            "(E_real, E_recip, E_self, E_neut, eta, eps_avg, V) "
+            "(E_real, E_recip, E_self, E_neut, E_PC, E_lat, eta, eps_avg, V) "
             "for every charge state."))
     diag_grp.add_argument(
         "--dry-run",

@@ -1,19 +1,28 @@
 """Golden-output regression tests.
 
-Compares the current package's output against the reference output
-captured (in tests/golden/) from the original, unmodified monolithic
-defect_formation_energy.py running on examples/example_input.yaml.
-This is the primary safety net for the ikazuchix/ package split: it must
-keep reproducing the same numbers by default, regardless of whether
-numba/MPI acceleration happens to be active (parametrized below) --
-those change performance only, never results.
+Compares the current package's output against the reference output in
+tests/golden/, captured with the corrected Kumagai-Oba Ewald energy of
+0.1.0a2 by running, from the repo root:
+
+    python -m ikazuchix -i examples/example_input.yaml --out-dir tests/golden -p \
+        > tests/golden/stdout.log 2> tests/golden/stderr.log
+
+That corrected E_PC is itself validated against physics, not against a
+previous implementation, in tests/test_ewald_physics.py (eta invariance,
+the simple-cubic Madelung constant, an independent brute-force
+reference). Earlier goldens reproduced the original monolithic
+defect_formation_energy.py (kept as original_monolith_reference.py.txt
+for history), whose KO lattice term was wrong -- see docs/adr/0006.
+
+The output must stay identical by default regardless of whether
+numba/MPI acceleration is active (parametrized below) -- those change
+performance only, never results.
 """
 
 import subprocess
 import sys
 
 import pytest
-
 from conftest import (
     ENTRY_POINT_ARGS,
     EXAMPLE_INPUT,
@@ -32,8 +41,9 @@ _ACCELERATION_MODES = [
 
 
 def _run(tmp_path, extra_args=()):
-    result = run_cli(["-i", str(EXAMPLE_INPUT), "--out-dir", str(tmp_path),
-                       "-p", *extra_args])
+    result = run_cli(
+        ["-i", str(EXAMPLE_INPUT), "--out-dir", str(tmp_path), "-p", *extra_args]
+    )
     assert result.returncode == 0, result.stderr
     return result
 
@@ -47,7 +57,9 @@ def test_results_txt_matches_golden(tmp_path, extra_args):
 @pytest.mark.parametrize("extra_args", _ACCELERATION_MODES)
 def test_ctls_summary_matches_golden(tmp_path, extra_args):
     _run(tmp_path, extra_args)
-    assert_text_numerically_equal(tmp_path / "ctls_summary.txt", GOLDEN_DIR / "ctls_summary.txt")
+    assert_text_numerically_equal(
+        tmp_path / "ctls_summary.txt", GOLDEN_DIR / "ctls_summary.txt"
+    )
 
 
 @pytest.mark.parametrize("extra_args", _ACCELERATION_MODES)
@@ -55,7 +67,8 @@ def test_ef_vs_ef_tables_match_golden(tmp_path, extra_args):
     _run(tmp_path, extra_args)
     for name in ("V_Ga_ef_vs_ef.txt", "V_N_ef_vs_ef.txt"):
         assert_text_numerically_equal(
-            tmp_path / "ef_vs_ef" / name, GOLDEN_DIR / "ef_vs_ef" / name)
+            tmp_path / "ef_vs_ef" / name, GOLDEN_DIR / "ef_vs_ef" / name
+        )
 
 
 @pytest.mark.parametrize("extra_args", _ACCELERATION_MODES)
@@ -63,7 +76,8 @@ def test_summary_tables_match_golden(tmp_path, extra_args):
     _run(tmp_path, extra_args)
     for name in ("V_Ga_summary.txt", "V_N_summary.txt"):
         assert_text_numerically_equal(
-            tmp_path / "summary" / name, GOLDEN_DIR / "summary" / name)
+            tmp_path / "summary" / name, GOLDEN_DIR / "summary" / name
+        )
 
 
 @requires_matplotlib
@@ -103,11 +117,14 @@ def test_default_invocation_without_any_new_flags_matches_golden_byte_exact(tmp_
     assert result.returncode == 0, result.stderr
 
     for rel_path in (
-        "results.txt", "ctls_summary.txt",
-        "ef_vs_ef/V_Ga_ef_vs_ef.txt", "ef_vs_ef/V_N_ef_vs_ef.txt",
-        "summary/V_Ga_summary.txt", "summary/V_N_summary.txt",
+        "results.txt",
+        "ctls_summary.txt",
+        "ef_vs_ef/V_Ga_ef_vs_ef.txt",
+        "ef_vs_ef/V_N_ef_vs_ef.txt",
+        "summary/V_Ga_summary.txt",
+        "summary/V_N_summary.txt",
     ):
-        got    = (tmp_path / rel_path).read_bytes()
+        got = (tmp_path / rel_path).read_bytes()
         golden = (GOLDEN_DIR / rel_path).read_bytes()
         assert got == golden, f"{rel_path}: byte-exact mismatch vs golden"
 
@@ -118,9 +135,19 @@ def test_default_invocation_without_any_new_flags_matches_golden_byte_exact(tmp_
 @requires_mpirun
 @pytest.mark.parametrize("n_ranks", [1, 2, 4])
 def test_results_txt_matches_golden_under_mpirun(tmp_path, n_ranks):
-    cmd = ["mpirun", "-n", str(n_ranks), sys.executable, *ENTRY_POINT_ARGS,
-           "-i", str(EXAMPLE_INPUT), "--out-dir", str(tmp_path)]
-    result = subprocess.run(cmd, cwd=str(REPO_ROOT), capture_output=True,
-                             text=True, timeout=120)
+    cmd = [
+        "mpirun",
+        "-n",
+        str(n_ranks),
+        sys.executable,
+        *ENTRY_POINT_ARGS,
+        "-i",
+        str(EXAMPLE_INPUT),
+        "--out-dir",
+        str(tmp_path),
+    ]
+    result = subprocess.run(
+        cmd, cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120
+    )
     assert result.returncode == 0, result.stderr
     assert_text_numerically_equal(tmp_path / "results.txt", GOLDEN_DIR / "results.txt")

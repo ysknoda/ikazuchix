@@ -27,14 +27,20 @@ def _derive_ewald_params(lattice, epsilon, ewald_param=None):
     G_mat    = reciprocal_lattice(lattice)
     eps_avg  = average_dielectric(epsilon)
     eps_inv  = np.linalg.inv(epsilon)
-    # eta: heuristic  eta = sqrtpi / V^(1/3)  [Ang^-1]
+    sqrt_det = math.sqrt(np.linalg.det(epsilon))
+    # eta heuristic: eta = sqrt(pi * eps_avg) / V^(1/3)  [Ang^-1].
+    # The real-space sum runs over the dielectric-metric distance
+    # sqrt(R . eps^-1 . R) ~ |R| / sqrt(eps_avg), the reciprocal sum over
+    # G . eps . G ~ eps_avg |G|^2, so the sqrt(eps_avg) factor balances
+    # the two sums; with it, 3 shells converge both to <1e-8 eV for
+    # typical 30-100 atom supercells (docs/adr/0006).
     eta      = (float(ewald_param) if ewald_param is not None
-                else math.sqrt(math.pi) / (V ** (1.0 / 3.0)))
+                else math.sqrt(math.pi * eps_avg) / (V ** (1.0 / 3.0)))
     if eta <= 0:
         raise ValueError(
             f"Ewald splitting parameter eta must be positive "
             f"(got {eta}).  Check --ewald-eta.")
-    return V, G_mat, eps_avg, eps_inv, eta
+    return V, G_mat, eps_avg, eps_inv, sqrt_det, eta
 
 
 class KumagaiObaCorrectionCalculator:
@@ -42,17 +48,27 @@ class KumagaiObaCorrectionCalculator:
     Finite-size charge correction: Kumagai & Oba, PRB 89, 195205 (2014).
 
     E_KO  = E_lat + q * DeltaV
-    E_lat = E_real + E_recip + E_self_ewald + E_neutralize
+    E_lat = -E_PC                              (lattice correction, > 0)
+    E_PC  = E_real + E_recip + E_self_ewald + E_neutralize
 
-    Anisotropic dielectric screening (A-1)
-    ---------------------------------------
-    Following KO 2014, anisotropy is handled exclusively in the
-    reciprocal-space sum via the quadratic form G * eps^-1 * G (Eq. 14).
-    The real-space sum (Eq. 13) uses the scalar average eps_avg = tr(eps)/3,
-    which is the formulation adopted in the original paper.  This is the
-    physically correct decomposition: the long-range Fourier modes carry
-    the full tensor information, while the short-range real-space sum is
-    well-represented by the isotropic average.
+    E_PC is the electrostatic energy of a point charge q in its own
+    periodic array, screened by the full dielectric tensor eps and
+    neutralized by a uniform background (Rurali & Cartoixa, Nano Lett. 9,
+    975 (2009); Kumagai & Oba, PRB 89, 195205 (2014), Eq. 8):
+
+        E_PC = (q^2 K / 2) * [
+              sum_{R!=0} erfc(eta r_R) / (sqrt(det eps) r_R)
+            + (4 pi / V) sum_{G!=0} exp(-G.eps.G / 4 eta^2) / (G.eps.G)
+            - 2 eta / (sqrt(pi) sqrt(det eps))
+            - pi / (V eta^2) ],        r_R = sqrt(R . eps^-1 . R)
+
+    with K = e^2/(4 pi eps0) in eV*Ang.  E_PC is independent of the
+    splitting parameter eta (tested), and for an isotropic eps and a
+    simple-cubic cell of side L it reduces to -q^2 K alpha / (2 eps L)
+    with the Madelung constant alpha = 2.8373 (tested).  E_PC < 0, so
+    the correction added to the formation energy is E_lat = -E_PC > 0.
+    (Before 0.1.0a2 the reciprocal term lacked the factor 1/2 and used
+    G.eps^-1.G, which made E_lat eta-dependent; see docs/adr/0006.)
 
     Ewald convergence check (A-2)
     ------------------------------
@@ -99,12 +115,12 @@ class KumagaiObaCorrectionCalculator:
                  verbose=False, adaptive=False, ewald_tol=None,
                  max_shells=15, shell_cache=None):
         self.L        = lattice
-        self.eps      = epsilon
+        self.eps      = np.asarray(epsilon, dtype=float)
         self.q        = int(charge)
         self.r_def    = np.array(defect_frac, dtype=float)
         self.delta_v  = float(delta_v)
         self.verbose  = verbose
-        self.V, self.G_mat, self.eps_avg, self.eps_inv, self.eta = \
+        self.V, self.G_mat, self.eps_avg, self.eps_inv, self.sqrt_det, self.eta = \
             _derive_ewald_params(lattice, epsilon, ewald_param)
         self.n_real   = int(real_cutoff)
         self.n_recip  = int(recip_cutoff)
@@ -122,11 +138,8 @@ class KumagaiObaCorrectionCalculator:
 
     def _E_real(self):
         """
-        E_real = (q^2/2) * K * sum_{R!=0} erfc(eta|R| / sqrteps_avg) / (eps_avg |R|)
-
-        Per KO 2014 the real-space sum uses the isotropic scalar dielectric
-        eps_avg = tr(eps)/3.  The full anisotropic screening is captured in the
-        reciprocal-space sum through G*eps^-1*G (Eq. 14).
+        E_real = (q^2/2) * K * sum_{R!=0} erfc(eta r) / (sqrt(det eps) r),
+        r = sqrt(R . eps^-1 . R)
 
         Convergence check (A-2): contribution of the outermost shell is
         accumulated and compared against the tolerance (fixed cutoff), or
@@ -142,7 +155,7 @@ class KumagaiObaCorrectionCalculator:
                    else self.shell_cache.raw_real_fixed)
         else:
             kernel = use_kernel(ewald_real_shell_sum)
-            raw = lambda m: kernel(m, self.L, self.eta, self.eps_avg)
+            raw = lambda m: kernel(m, self.L, self.eta, self.eps_inv, self.sqrt_det)
 
         n = self.n_real
         E, E_outer = raw(n)
@@ -179,8 +192,8 @@ class KumagaiObaCorrectionCalculator:
 
     def _E_recip(self):
         """
-        E_recip = (q^2*K*4pi) / (V*sqrtdet eps) * sum_{G!=0}
-                  exp(-G*eps^-1*G / (4eta^2)) / (G*eps^-1*G)
+        E_recip = (q^2/2) * K * (4pi/V) * sum_{G!=0}
+                  exp(-G.eps.G / (4eta^2)) / (G.eps.G)
 
         Convergence check (A-2): outermost shell contribution monitored
         (fixed cutoff), or the cutoff is grown until converged (adaptive).
@@ -190,10 +203,9 @@ class KumagaiObaCorrectionCalculator:
                    else self.shell_cache.raw_recip_fixed)
         else:
             kernel = use_kernel(ewald_recip_shell_sum)
-            raw = lambda m: kernel(m, self.G_mat, self.eps_inv, self.eta)
+            raw = lambda m: kernel(m, self.G_mat, self.eps, self.eta)
 
-        sqrt_det = math.sqrt(abs(np.linalg.det(self.eps)))
-        prefactor = (self.q**2) * COULOMB_PREFACTOR * 4.0 * math.pi / (self.V * sqrt_det)
+        prefactor = 0.5 * (self.q**2) * COULOMB_PREFACTOR * 4.0 * math.pi / self.V
 
         n = self.n_recip
         E, E_outer = raw(n)
@@ -229,10 +241,10 @@ class KumagaiObaCorrectionCalculator:
 
     def _E_self_ewald(self):
         """
-        E_self = -q^2 * K * eta / (sqrtpi * eps_avg^(3/2))
+        E_self = -q^2 * K * eta / (sqrtpi * sqrt(det eps))
         """
         return -(self.q**2) * COULOMB_PREFACTOR * self.eta / (
-            math.sqrt(math.pi) * self.eps_avg**1.5)
+            math.sqrt(math.pi) * self.sqrt_det)
 
     # ------------------------------------------------------------------
     # Background neutralization  (Eq. 16, KO 2014)
@@ -240,10 +252,14 @@ class KumagaiObaCorrectionCalculator:
 
     def _E_neutralize(self):
         """
-        E_bg = -q^2 * K * pi / (2 * V * eta^2 * eps_avg)
+        E_bg = -q^2 * K * pi / (2 * V * eta^2)
+
+        No dielectric factor: in the anisotropic Ewald form the G -> 0
+        limit of the screened reciprocal sum removes exactly this
+        constant, independent of eps.
         """
         return -(self.q**2) * COULOMB_PREFACTOR * math.pi / (
-            2.0 * self.V * self.eta**2 * self.eps_avg)
+            2.0 * self.V * self.eta**2)
 
     # ------------------------------------------------------------------
     # Public interface  (C-3: cached)
@@ -260,21 +276,22 @@ class KumagaiObaCorrectionCalculator:
         if self.q == 0:
             self._cache = {k: 0.0 for k in (
                 "E_real", "E_recip", "E_self_ewald", "E_neutralize",
-                "E_lat", "E_alignment", "E_KO")}
+                "E_PC", "E_lat", "E_alignment", "E_KO")}
             return self._cache
 
         E_real       = self._E_real()
         E_recip      = self._E_recip()
         E_self_ewald = self._E_self_ewald()
         E_neutralize = self._E_neutralize()
-        E_lat        = E_real + E_recip + E_self_ewald + E_neutralize
+        E_PC         = E_real + E_recip + E_self_ewald + E_neutralize
+        E_lat        = -E_PC
         E_alignment  = self.q * self.delta_v
         E_KO         = E_lat + E_alignment
 
         self._cache = dict(
             E_real=E_real, E_recip=E_recip,
             E_self_ewald=E_self_ewald, E_neutralize=E_neutralize,
-            E_lat=E_lat, E_alignment=E_alignment, E_KO=E_KO)
+            E_PC=E_PC, E_lat=E_lat, E_alignment=E_alignment, E_KO=E_KO)
 
         if self.verbose:
             print(f"\n  --- KO Correction (q={self.q:+d}) ---")
@@ -316,12 +333,13 @@ class EwaldShellCache:
     the raw values retrieved here.
     """
 
-    def __init__(self, L, eta, eps_avg, G_mat, eps_inv):
+    def __init__(self, L, eta, eps, eps_inv, sqrt_det, G_mat):
         self.L        = L
         self.eta      = eta
-        self.eps_avg  = eps_avg
-        self.G_mat    = G_mat
+        self.eps      = eps
         self.eps_inv  = eps_inv
+        self.sqrt_det = sqrt_det
+        self.G_mat    = G_mat
         self._real_fixed  = {}
         self._recip_fixed = {}
         # (Perf-2) incremental adaptive-mode growth: {n: (cumulative_E,
@@ -335,13 +353,13 @@ class EwaldShellCache:
     def raw_real_fixed(self, n):
         if n not in self._real_fixed:
             kernel = use_kernel(ewald_real_shell_sum)
-            self._real_fixed[n] = kernel(n, self.L, self.eta, self.eps_avg)
+            self._real_fixed[n] = kernel(n, self.L, self.eta, self.eps_inv, self.sqrt_det)
         return self._real_fixed[n]
 
     def raw_recip_fixed(self, n):
         if n not in self._recip_fixed:
             kernel = use_kernel(ewald_recip_shell_sum)
-            self._recip_fixed[n] = kernel(n, self.G_mat, self.eps_inv, self.eta)
+            self._recip_fixed[n] = kernel(n, self.G_mat, self.eps, self.eta)
         return self._recip_fixed[n]
 
     def raw_real_upto(self, n):
@@ -359,7 +377,7 @@ class EwaldShellCache:
             running = (self._real_upto[self._real_upto_max][0]
                        if self._real_upto_max >= 0 else 0.0)
             for m in range(self._real_upto_max + 1, n + 1):
-                e_ring, e_ring_outer = kernel(m, self.L, self.eta, self.eps_avg)
+                e_ring, e_ring_outer = kernel(m, self.L, self.eta, self.eps_inv, self.sqrt_det)
                 running += e_ring
                 self._real_upto[m] = (running, e_ring_outer)
             self._real_upto_max = n
@@ -373,7 +391,7 @@ class EwaldShellCache:
             running = (self._recip_upto[self._recip_upto_max][0]
                        if self._recip_upto_max >= 0 else 0.0)
             for m in range(self._recip_upto_max + 1, n + 1):
-                e_ring, e_ring_outer = kernel(m, self.G_mat, self.eps_inv, self.eta)
+                e_ring, e_ring_outer = kernel(m, self.G_mat, self.eps, self.eta)
                 running += e_ring
                 self._recip_upto[m] = (running, e_ring_outer)
             self._recip_upto_max = n
@@ -381,10 +399,11 @@ class EwaldShellCache:
 
 
 def build_ewald_shell_cache(lattice, epsilon, ewald_param=None):
-    """Factory: derive (V, G_mat, eps_avg, eps_inv, eta) once via the
-    same formulas KumagaiObaCorrectionCalculator.__init__ uses, and
-    package the subset EwaldShellCache needs (all but V, which is only
-    used for per-charge-state scaling, not the raw shell sums)."""
-    _V, G_mat, eps_avg, eps_inv, eta = _derive_ewald_params(
+    """Factory: derive (V, G_mat, eps_avg, eps_inv, sqrt_det, eta) once
+    via the same formulas KumagaiObaCorrectionCalculator.__init__ uses,
+    and package the subset EwaldShellCache needs (V and eps_avg are only
+    used for per-charge-state scaling / reporting, not the raw sums)."""
+    _V, G_mat, _eps_avg, eps_inv, sqrt_det, eta = _derive_ewald_params(
         lattice, epsilon, ewald_param)
-    return EwaldShellCache(lattice, eta, eps_avg, G_mat, eps_inv)
+    return EwaldShellCache(lattice, eta, np.asarray(epsilon, dtype=float),
+                           eps_inv, sqrt_det, G_mat)

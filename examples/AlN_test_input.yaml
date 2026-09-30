@@ -23,6 +23,13 @@
 #   u = 0.3821 (same reference) -- anion basis (1/3, 2/3, u)
 # =============================================================================
 
+# NOTE (0.1.0a2, docs/adr/0006): the charged-state 'energy' values were
+# originally tuned against ikazuchix <= 0.1.0a1, whose Kumagai-Oba lattice
+# term was ~10x too large. They were then shifted mechanically, per charge
+# state, by E_KO(old) - E_KO(fixed), so every formation energy and CTL of
+# this file is unchanged -- only the KO breakdown is now correct. They are
+# still placeholders, not DFT results.
+
 bulk:
   formula: AlN
   energy: -498.204          # eV -- PLACEHOLDER: DFT total energy of the 72-atom bulk supercell
@@ -114,15 +121,15 @@ defects:
         potential_alignment: {delta_v: 0.00}
         degeneracy: 1
       - charge: -1
-        energy: -486.858        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL ladder; see chat reply)
+        energy: -484.972209        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL ladder; see chat reply)
         potential_alignment: {delta_v: -0.052}  # eV -- PLACEHOLDER
         degeneracy: 2
       - charge: -2
-        energy: -493.150        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL ladder; see chat reply)
+        energy: -485.606837        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL ladder; see chat reply)
         potential_alignment: {delta_v: -0.097}
         degeneracy: 1
       - charge: -3
-        energy: -502.321        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL ladder; see chat reply)
+        energy: -485.348883        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL ladder; see chat reply)
         potential_alignment: {delta_v: -0.138}
         degeneracy: 4
 
@@ -148,5 +155,5 @@ defects:
         energy: -491.561        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL; see chat reply)
         potential_alignment: {delta_v: 0.00}
       - charge: 1
-        energy: -492.049        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL; low formation energy at the O-rich limit is the point of this example)
+        energy: -490.163209        # eV -- PLACEHOLDER (tuned for an illustrative in-gap CTL; low formation energy at the O-rich limit is the point of this example)
         potential_alignment: {delta_v: 0.038}   # eV -- PLACEHOLDER

@@ -5,10 +5,14 @@ requirement of numba.njit, which cannot compile bound instance methods
 that close over an arbitrary ``self``. Each kernel returns the RAW
 (unscaled) shell sum plus the raw outermost-shell contribution; the
 physical prefactor (0.5*q^2*COULOMB_PREFACTOR, etc.) is applied exactly
-once by the caller in ikazuchix/ewald.py, in the same order as the original
-pure-Python implementation, so results are bit-for-bit identical
-whether or not numba is active (verified empirically against the
-original np.linalg.norm / G @ eps_inv @ G expressions).
+once by the caller in ikazuchix/ewald.py, so results are bit-for-bit
+identical whether or not numba is active (the same source runs either
+JIT-compiled or as plain Python).
+
+Anisotropic screened point-charge lattice (see ikazuchix/ewald.py for the
+full energy expression): the real-space sum runs over the metric distance
+r = sqrt(R . eps^-1 . R), the reciprocal-space sum over the quadratic
+form G . eps . G.
 
 Do not add fastmath=True or parallel=True/prange to these kernels:
 either would permit floating-point reassociation and change rounding,
@@ -21,7 +25,23 @@ from ikazuchix.numba_shim import njit
 
 
 @njit(cache=True)
-def ewald_real_shell_sum(n, L, eta, eps_avg):
+def _metric_sq(x, y, z, M):
+    """v . M . v for v = (x, y, z) and a 3x3 matrix M, evaluated as
+    (v @ M) @ v with a fixed summation order."""
+    t0 = x * M[0, 0] + y * M[1, 0] + z * M[2, 0]
+    t1 = x * M[0, 1] + y * M[1, 1] + z * M[2, 1]
+    t2 = x * M[0, 2] + y * M[1, 2] + z * M[2, 2]
+    return t0 * x + t1 * y + t2 * z
+
+
+@njit(cache=True)
+def _metric_norm(x, y, z, M):
+    """sqrt(v . M . v) -- the dielectric-metric length of v."""
+    return math.sqrt(_metric_sq(x, y, z, M))
+
+
+@njit(cache=True)
+def ewald_real_shell_sum(n, L, eta, eps_inv, sqrt_det):
     """Real-space Ewald sum (KO 2014, Eq. 13), summed over shells |n_i|<=n.
 
     Parameters
@@ -29,11 +49,13 @@ def ewald_real_shell_sum(n, L, eta, eps_avg):
     n       : int            -- shell cutoff (inclusive)
     L       : float64[3,3]   -- lattice matrix, rows = lattice vectors
     eta     : float64        -- Ewald splitting parameter [Ang^-1]
-    eps_avg : float64        -- scalar-averaged dielectric constant
+    eps_inv : float64[3,3]   -- inverse dielectric tensor
+    sqrt_det: float64        -- sqrt(det eps)
 
     Returns
     -------
-    (E_raw, E_outer_raw) : sum_{R!=0} erfc(eta|R|/sqrt(eps_avg))/(eps_avg|R|)
+    (E_raw, E_outer_raw) : sum_{R!=0} erfc(eta r)/(sqrt(det eps) r),
+    r = sqrt(R . eps^-1 . R),
     and the (absolute-value-summed) contribution from the outermost
     shell alone (max(|n1|,|n2|,|n3|) == n), both unscaled by q/COULOMB_PREFACTOR.
     """
@@ -47,8 +69,8 @@ def ewald_real_shell_sum(n, L, eta, eps_avg):
                 Rx = n1 * L[0, 0] + n2 * L[1, 0] + n3 * L[2, 0]
                 Ry = n1 * L[0, 1] + n2 * L[1, 1] + n3 * L[2, 1]
                 Rz = n1 * L[0, 2] + n2 * L[1, 2] + n3 * L[2, 2]
-                r = math.sqrt(Rx * Rx + Ry * Ry + Rz * Rz)
-                term = math.erfc(eta * r / math.sqrt(eps_avg)) / (eps_avg * r)
+                r = _metric_norm(Rx, Ry, Rz, eps_inv)
+                term = math.erfc(eta * r) / (sqrt_det * r)
                 E += term
                 if max(abs(n1), abs(n2), abs(n3)) == n:
                     E_outer += abs(term)
@@ -56,21 +78,21 @@ def ewald_real_shell_sum(n, L, eta, eps_avg):
 
 
 @njit(cache=True)
-def ewald_recip_shell_sum(n, G_mat, eps_inv, eta):
+def ewald_recip_shell_sum(n, G_mat, eps, eta):
     """Reciprocal-space Ewald sum (KO 2014, Eq. 14), summed over shells |m_i|<=n.
 
     Parameters
     ----------
     n       : int            -- shell cutoff (inclusive)
     G_mat   : float64[3,3]   -- reciprocal lattice matrix, rows = G-vectors
-    eps_inv : float64[3,3]   -- inverse dielectric tensor
+    eps     : float64[3,3]   -- dielectric tensor
     eta     : float64        -- Ewald splitting parameter [Ang^-1]
 
     Returns
     -------
-    (E_raw, E_outer_raw) : sum_{G!=0} exp(-GEG/(4eta^2))/GEG  and the
-    outermost-shell-only contribution, both unscaled by the
-    q^2*COULOMB_PREFACTOR*4*pi/(V*sqrt(det eps)) prefactor.
+    (E_raw, E_outer_raw) : sum_{G!=0} exp(-GeG/(4eta^2))/GeG with
+    GeG = G . eps . G, and the outermost-shell-only contribution, both
+    unscaled by the 0.5*q^2*COULOMB_PREFACTOR*4*pi/V prefactor.
     """
     E = 0.0
     E_outer = 0.0
@@ -82,12 +104,7 @@ def ewald_recip_shell_sum(n, G_mat, eps_inv, eta):
                 Gx = m1 * G_mat[0, 0] + m2 * G_mat[1, 0] + m3 * G_mat[2, 0]
                 Gy = m1 * G_mat[0, 1] + m2 * G_mat[1, 1] + m3 * G_mat[2, 1]
                 Gz = m1 * G_mat[0, 2] + m2 * G_mat[1, 2] + m3 * G_mat[2, 2]
-                # G @ eps_inv @ G, computed as (G @ eps_inv) @ G to match
-                # the original numpy expression's summation order exactly.
-                t0 = Gx * eps_inv[0, 0] + Gy * eps_inv[1, 0] + Gz * eps_inv[2, 0]
-                t1 = Gx * eps_inv[0, 1] + Gy * eps_inv[1, 1] + Gz * eps_inv[2, 1]
-                t2 = Gx * eps_inv[0, 2] + Gy * eps_inv[1, 2] + Gz * eps_inv[2, 2]
-                geg = t0 * Gx + t1 * Gy + t2 * Gz
+                geg = _metric_sq(Gx, Gy, Gz, eps)
                 if geg < 1e-20:
                     continue
                 term = math.exp(-geg / (4.0 * eta ** 2)) / geg
@@ -119,7 +136,7 @@ def ewald_recip_shell_sum(n, G_mat, eps_inv, eta):
 # ===========================================================================
 
 @njit(cache=True)
-def ewald_real_shell_ring_sum(n, L, eta, eps_avg):
+def ewald_real_shell_ring_sum(n, L, eta, eps_inv, sqrt_det):
     """Real-space contribution from ONLY shell max(|n1|,|n2|,|n3|) == n.
 
     Returns (E_ring, E_outer_ring): the signed sum of that shell's terms,
@@ -139,8 +156,8 @@ def ewald_real_shell_ring_sum(n, L, eta, eps_avg):
                 Rx = n1 * L[0, 0] + n2 * L[1, 0] + n3 * L[2, 0]
                 Ry = n1 * L[0, 1] + n2 * L[1, 1] + n3 * L[2, 1]
                 Rz = n1 * L[0, 2] + n2 * L[1, 2] + n3 * L[2, 2]
-                r = math.sqrt(Rx * Rx + Ry * Ry + Rz * Rz)
-                term = math.erfc(eta * r / math.sqrt(eps_avg)) / (eps_avg * r)
+                r = _metric_norm(Rx, Ry, Rz, eps_inv)
+                term = math.erfc(eta * r) / (sqrt_det * r)
                 E += term
                 E_outer += abs(term)
     for n2 in (-n, n):
@@ -149,8 +166,8 @@ def ewald_real_shell_ring_sum(n, L, eta, eps_avg):
                 Rx = n1 * L[0, 0] + n2 * L[1, 0] + n3 * L[2, 0]
                 Ry = n1 * L[0, 1] + n2 * L[1, 1] + n3 * L[2, 1]
                 Rz = n1 * L[0, 2] + n2 * L[1, 2] + n3 * L[2, 2]
-                r = math.sqrt(Rx * Rx + Ry * Ry + Rz * Rz)
-                term = math.erfc(eta * r / math.sqrt(eps_avg)) / (eps_avg * r)
+                r = _metric_norm(Rx, Ry, Rz, eps_inv)
+                term = math.erfc(eta * r) / (sqrt_det * r)
                 E += term
                 E_outer += abs(term)
     for n3 in (-n, n):
@@ -159,15 +176,15 @@ def ewald_real_shell_ring_sum(n, L, eta, eps_avg):
                 Rx = n1 * L[0, 0] + n2 * L[1, 0] + n3 * L[2, 0]
                 Ry = n1 * L[0, 1] + n2 * L[1, 1] + n3 * L[2, 1]
                 Rz = n1 * L[0, 2] + n2 * L[1, 2] + n3 * L[2, 2]
-                r = math.sqrt(Rx * Rx + Ry * Ry + Rz * Rz)
-                term = math.erfc(eta * r / math.sqrt(eps_avg)) / (eps_avg * r)
+                r = _metric_norm(Rx, Ry, Rz, eps_inv)
+                term = math.erfc(eta * r) / (sqrt_det * r)
                 E += term
                 E_outer += abs(term)
     return E, E_outer
 
 
 @njit(cache=True)
-def ewald_recip_shell_ring_sum(n, G_mat, eps_inv, eta):
+def ewald_recip_shell_ring_sum(n, G_mat, eps, eta):
     """Reciprocal-space contribution from ONLY shell max(|m1|,|m2|,|m3|)
     == n. Same face-group enumeration and (E_ring, E_outer_ring)
     semantics as ewald_real_shell_ring_sum() -- see its docstring."""
@@ -181,10 +198,7 @@ def ewald_recip_shell_ring_sum(n, G_mat, eps_inv, eta):
                 Gx = m1 * G_mat[0, 0] + m2 * G_mat[1, 0] + m3 * G_mat[2, 0]
                 Gy = m1 * G_mat[0, 1] + m2 * G_mat[1, 1] + m3 * G_mat[2, 1]
                 Gz = m1 * G_mat[0, 2] + m2 * G_mat[1, 2] + m3 * G_mat[2, 2]
-                t0 = Gx * eps_inv[0, 0] + Gy * eps_inv[1, 0] + Gz * eps_inv[2, 0]
-                t1 = Gx * eps_inv[0, 1] + Gy * eps_inv[1, 1] + Gz * eps_inv[2, 1]
-                t2 = Gx * eps_inv[0, 2] + Gy * eps_inv[1, 2] + Gz * eps_inv[2, 2]
-                geg = t0 * Gx + t1 * Gy + t2 * Gz
+                geg = _metric_sq(Gx, Gy, Gz, eps)
                 if geg < 1e-20:
                     continue
                 term = math.exp(-geg / (4.0 * eta ** 2)) / geg
@@ -196,10 +210,7 @@ def ewald_recip_shell_ring_sum(n, G_mat, eps_inv, eta):
                 Gx = m1 * G_mat[0, 0] + m2 * G_mat[1, 0] + m3 * G_mat[2, 0]
                 Gy = m1 * G_mat[0, 1] + m2 * G_mat[1, 1] + m3 * G_mat[2, 1]
                 Gz = m1 * G_mat[0, 2] + m2 * G_mat[1, 2] + m3 * G_mat[2, 2]
-                t0 = Gx * eps_inv[0, 0] + Gy * eps_inv[1, 0] + Gz * eps_inv[2, 0]
-                t1 = Gx * eps_inv[0, 1] + Gy * eps_inv[1, 1] + Gz * eps_inv[2, 1]
-                t2 = Gx * eps_inv[0, 2] + Gy * eps_inv[1, 2] + Gz * eps_inv[2, 2]
-                geg = t0 * Gx + t1 * Gy + t2 * Gz
+                geg = _metric_sq(Gx, Gy, Gz, eps)
                 if geg < 1e-20:
                     continue
                 term = math.exp(-geg / (4.0 * eta ** 2)) / geg
@@ -211,10 +222,7 @@ def ewald_recip_shell_ring_sum(n, G_mat, eps_inv, eta):
                 Gx = m1 * G_mat[0, 0] + m2 * G_mat[1, 0] + m3 * G_mat[2, 0]
                 Gy = m1 * G_mat[0, 1] + m2 * G_mat[1, 1] + m3 * G_mat[2, 1]
                 Gz = m1 * G_mat[0, 2] + m2 * G_mat[1, 2] + m3 * G_mat[2, 2]
-                t0 = Gx * eps_inv[0, 0] + Gy * eps_inv[1, 0] + Gz * eps_inv[2, 0]
-                t1 = Gx * eps_inv[0, 1] + Gy * eps_inv[1, 1] + Gz * eps_inv[2, 1]
-                t2 = Gx * eps_inv[0, 2] + Gy * eps_inv[1, 2] + Gz * eps_inv[2, 2]
-                geg = t0 * Gx + t1 * Gy + t2 * Gz
+                geg = _metric_sq(Gx, Gy, Gz, eps)
                 if geg < 1e-20:
                     continue
                 term = math.exp(-geg / (4.0 * eta ** 2)) / geg

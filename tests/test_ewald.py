@@ -26,7 +26,7 @@ def test_neutral_charge_is_all_zero():
     result = _calc(0).compute()
     assert result == {k: 0.0 for k in
                        ("E_real", "E_recip", "E_self_ewald", "E_neutralize",
-                        "E_lat", "E_alignment", "E_KO")}
+                        "E_PC", "E_lat", "E_alignment", "E_KO")}
 
 
 def test_charge_sign_symmetry():
@@ -38,7 +38,7 @@ def test_charge_sign_symmetry():
             lattice=L, epsilon=EPS, charge=-2, defect_frac=POS, delta_v=0.05).compute()
 
     # q^2-dependent terms are identical for +q and -q ...
-    for key in ("E_real", "E_recip", "E_self_ewald", "E_neutralize", "E_lat"):
+    for key in ("E_real", "E_recip", "E_self_ewald", "E_neutralize", "E_PC", "E_lat"):
         assert pos[key] == pytest.approx(neg[key])
     # ... while the linear alignment term (and hence E_KO) flips sign.
     assert pos["E_alignment"] == pytest.approx(-neg["E_alignment"])
@@ -55,7 +55,9 @@ def test_result_is_cached():
 
 
 def test_convergence_warning_fires_for_small_cutoff():
-    calc = _calc(3, real_cutoff=3, recip_cutoff=3)
+    # One shell is far from converged (~5e-2 eV outer-shell contribution)
+    # even with the balanced default eta.
+    calc = _calc(3, real_cutoff=1, recip_cutoff=1)
     with pytest.warns(RuntimeWarning, match="real-space|recip-space"):
         calc.compute()
 
@@ -70,19 +72,19 @@ def test_convergence_warning_absent_for_large_cutoff():
 
 
 def test_adaptive_mode_grows_shell_count_and_converges():
-    calc = _calc(3, real_cutoff=3, recip_cutoff=3, adaptive=True,
+    calc = _calc(3, real_cutoff=1, recip_cutoff=1, adaptive=True,
                   ewald_tol=1e-6, max_shells=20)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         calc.compute()
-    assert calc.n_real_used > 3 or calc.n_recip_used > 3
+    assert calc.n_real_used > 1 or calc.n_recip_used > 1
     runtime_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
     assert runtime_warnings == []  # should have converged within max_shells=20
 
 
 def test_adaptive_mode_warns_when_max_shells_too_small():
-    calc = _calc(3, real_cutoff=3, recip_cutoff=3, adaptive=True,
-                  ewald_tol=1e-6, max_shells=3)  # cannot grow at all
+    calc = _calc(3, real_cutoff=1, recip_cutoff=1, adaptive=True,
+                  ewald_tol=1e-6, max_shells=1)  # cannot grow at all
     with pytest.warns(RuntimeWarning, match="did not reach"):
         calc.compute()
 
@@ -189,11 +191,11 @@ def test_shell_cache_raw_upto_matches_full_cube_within_tolerance(n):
     module docstring) -- not necessarily bit-exact."""
     cache = build_ewald_shell_cache(L, EPS)
     E_upto_real, _ = cache.raw_real_upto(n)
-    E_full_real, _ = ewald_real_shell_sum(n, L, cache.eta, cache.eps_avg)
+    E_full_real, _ = ewald_real_shell_sum(n, L, cache.eta, cache.eps_inv, cache.sqrt_det)
     assert E_upto_real == pytest.approx(E_full_real, rel=1e-9)
 
     E_upto_recip, _ = cache.raw_recip_upto(n)
-    E_full_recip, _ = ewald_recip_shell_sum(n, cache.G_mat, cache.eps_inv, cache.eta)
+    E_full_recip, _ = ewald_recip_shell_sum(n, cache.G_mat, cache.eps, cache.eta)
     assert E_upto_recip == pytest.approx(E_full_recip, rel=1e-9)
 
 

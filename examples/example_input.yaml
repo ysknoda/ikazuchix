@@ -25,6 +25,13 @@
 # --adaptive-ewald, --solve-fermi, --stability-diagram, ...); the default
 # `ikazuchix -i example_input.yaml` invocation ignores them entirely.
 
+# NOTE (0.1.0a2, docs/adr/0006): the charged-state 'energy' values were
+# originally tuned against ikazuchix <= 0.1.0a1, whose Kumagai-Oba lattice
+# term was ~10x too large. They were then shifted mechanically, per charge
+# state, by E_KO(old) - E_KO(fixed), so every formation energy and CTL of
+# this file is unchanged -- only the KO breakdown is now correct. They are
+# still placeholders, not DFT results.
+
 bulk:
   formula: GaN
   energy: -462.924          # eV, total DFT energy of the 72-atom bulk supercell
@@ -74,11 +81,11 @@ defects:
         num_atoms: 71
         potential_alignment: {delta_v: 0.000}
       - charge: -1
-        energy: -451.0689
+        energy: -449.096541
         num_atoms: 71
         potential_alignment: {delta_v: 0.020}
       - charge: -2
-        energy: -451.3766
+        energy: -443.487165
         num_atoms: 71
         potential_alignment: {delta_v: 0.050}
         degeneracy: 2  # optional, used only by --solve-fermi; illustrative
@@ -98,6 +105,6 @@ defects:
         num_atoms: 71
         potential_alignment: {delta_v: 0.000}
       - charge: 1
-        energy: -457.2919
+        energy: -455.319541
         num_atoms: 71
         potential_alignment: {delta_v: 0.000}

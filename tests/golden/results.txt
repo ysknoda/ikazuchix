@@ -34,23 +34,25 @@
 
   [KO Correction Breakdown]
     q = -2
-      E_real        : +2.370700 eV
-      E_recip       : +6.926766 eV
-      E_self(Ewald) : -0.200320 eV
+      E_real        : +0.021533 eV
+      E_recip       : +0.025826 eV
+      E_self(Ewald) : -0.627967 eV
       E_neutralize  : -0.313551 eV
-      E_lat         : +8.783594 eV
+      E_PC          : -0.894159 eV
+      E_lat (-E_PC) : +0.894159 eV
       E_alignment   : -0.100000 eV
-      E_KO (total)  : +8.683594 eV
+      E_KO (total)  : +0.794159 eV
       Chem.pot.corr.: -3.031000 eV
       E_f(E_F=0.850 eV) : +5.499994 eV
     q = -1
-      E_real        : +0.592675 eV
-      E_recip       : +1.731691 eV
-      E_self(Ewald) : -0.050080 eV
+      E_real        : +0.005383 eV
+      E_recip       : +0.006456 eV
+      E_self(Ewald) : -0.156992 eV
       E_neutralize  : -0.078388 eV
-      E_lat         : +2.195899 eV
+      E_PC          : -0.223540 eV
+      E_lat (-E_PC) : +0.223540 eV
       E_alignment   : -0.020000 eV
-      E_KO (total)  : +2.175899 eV
+      E_KO (total)  : +0.203540 eV
       Chem.pot.corr.: -3.031000 eV
       E_f(E_F=0.850 eV) : +5.149999 eV
     q = +0
@@ -58,7 +60,8 @@
       E_recip       : +0.000000 eV
       E_self(Ewald) : +0.000000 eV
       E_neutralize  : +0.000000 eV
-      E_lat         : +0.000000 eV
+      E_PC          : +0.000000 eV
+      E_lat (-E_PC) : +0.000000 eV
       E_alignment   : +0.000000 eV
       E_KO (total)  : +0.000000 eV
       Chem.pot.corr.: -3.031000 eV
@@ -82,19 +85,21 @@
       E_recip       : +0.000000 eV
       E_self(Ewald) : +0.000000 eV
       E_neutralize  : +0.000000 eV
-      E_lat         : +0.000000 eV
+      E_PC          : +0.000000 eV
+      E_lat (-E_PC) : +0.000000 eV
       E_alignment   : +0.000000 eV
       E_KO (total)  : +0.000000 eV
       Chem.pot.corr.: -9.828000 eV
       E_f(E_F=0.850 eV) : +4.000000 eV
     q = +1
-      E_real        : +0.592675 eV
-      E_recip       : +1.731691 eV
-      E_self(Ewald) : -0.050080 eV
+      E_real        : +0.005383 eV
+      E_recip       : +0.006456 eV
+      E_self(Ewald) : -0.156992 eV
       E_neutralize  : -0.078388 eV
-      E_lat         : +2.195899 eV
+      E_PC          : -0.223540 eV
+      E_lat (-E_PC) : +0.223540 eV
       E_alignment   : +0.000000 eV
-      E_KO (total)  : +2.195899 eV
+      E_KO (total)  : +0.223540 eV
       Chem.pot.corr.: -9.828000 eV
       E_f(E_F=0.850 eV) : +3.849999 eV
 

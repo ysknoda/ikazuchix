@@ -5,6 +5,16 @@
 > between releases, and it has not yet been broadly tested. Do not
 > rely on it for production use.
 
+> **Correctness notice (0.1.0a2).** Releases up to and including
+> **0.1.0a1 computed the Kumagai-Oba lattice term incorrectly**: the
+> Ewald energy depended on the splitting parameter `eta`, and was
+> typically ~10x too large (reciprocal-space term missing a factor 1/2
+> and using `G.eps^-1.G` instead of `G.eps.G`, background term with a
+> spurious `1/eps`). Formation energies, transition levels and
+> equilibrium concentrations from those versions should be recomputed.
+> See [CHANGELOG.md](CHANGELOG.md) and
+> [docs/adr/0006](docs/adr/0006-ko-ewald-lattice-energy-fix.md).
+
 Defect formation energy calculator for semiconductors, from VASP-style DFT total energies, with the Kumagai-Oba (KO) finite-size charge correction:
 
 > Y. Kumagai and F. Oba, *Phys. Rev. B* **89**, 195205 (2014).
@@ -19,7 +29,7 @@ Given a YAML description of a bulk supercell, one or more defect supercells (mul
 ## Features
 
 - Multiple defect types and charge states in one run, with a shared Fermi-level sweep.
-- Anisotropic dielectric screening (full tensor in the reciprocal-space sum).
+- Anisotropic dielectric screening: full tensor in both Ewald sums (dielectric metric `R.eps^-1.R` in real space, `G.eps.G` in reciprocal space), validated against eta-invariance, the simple-cubic Madelung constant and an independent reference (`tests/test_ewald_physics.py`).
 - Automatic composition completion from `removed_atoms`/`added_atoms`.
 - Thorough input validation: malformed or inconsistent YAML (bad charge values, missing nested keys, non-positive-definite dielectric tensors, degenerate lattices, ...) fails fast with a clear, contextualized error instead of a cryptic crash deep inside the calculation.
 - Chemical-potential consistency checks (host stability, thermodynamic bounds, missing species), optionally extended with explicit **competing secondary phases** (see [Chemical potential stability region](#chemical-potential-stability-region)).
@@ -166,7 +176,7 @@ python -m ikazuchix -i input.yaml --no-numba # force the pure-Python path
 
 See `benchmarks/bench_numba.py` for a speed comparison on this machine (real observed speedup: two orders of magnitude on the Ewald shell sums at larger cutoffs).
 
-For higher accuracy than the default fixed shell cutoff (`--real-cutoff 3 --recip-cutoff 3`, matching the tool's original hardcoded default), opt into adaptive convergence:
+The default fixed shell cutoff (`--real-cutoff 3 --recip-cutoff 3`) together with the default splitting parameter `eta = sqrt(pi * eps_avg) / V^(1/3)` converges both Ewald sums to well below `1e-6` eV for typical 30-100 atom supercells. For unusual cells, or an explicit `--ewald-eta`, opt into adaptive convergence:
 
 ```bash
 python -m ikazuchix -i input.yaml --adaptive-ewald
