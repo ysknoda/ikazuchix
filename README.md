@@ -133,9 +133,10 @@ All input is a single YAML file. Two layouts are accepted:
 | `defects[].charge_states[].energy` [eV] | DFT total energy of the defect supercell |
 | `defects[].charge_states[].num_atoms` | Atom count of the defect supercell (cross-checked against `composition`) |
 | `defects[].charge_states[].composition` | Atom counts (optional — auto-computed from bulk + removed/added atoms if omitted) |
-| `defects[].charge_states[].potential_alignment.delta_v` [eV] | Electrostatic potential alignment (e.g. from VASP LOCPOT far-field difference); `0.0` for `q = 0` |
+| `defects[].charge_states[].potential_alignment.delta_v` [eV] | `V_defect − V_bulk` averaged over the sampling region, **in VASP's own sign convention** (OUTCAR site potentials / LOCPOT are electron potential energies, `−eφ`). Without `alignment_sampling_sites` it must already have the point-charge potential subtracted; with them, give the raw difference. Irrelevant for `q = 0`. |
+| `defects[].alignment_sampling_sites` | Optional list of fractional `[x, y, z]` atomic sites over which the raw `delta_v` was averaged. When given, ikazuchix subtracts the Kumagai–Oba point-charge potential averaged over the same sites: `E_align = q·(delta_v + ⟨φ_PC⟩)`. See `docs/adr/0009`. |
 
-**Getting `delta_v` from VASP**: compute the planar-averaged electrostatic potential (LOCPOT) for both the defect and bulk supercells, and take the difference in the region far from the defect site (typically > ~6 Å away).
+**Getting `delta_v` from VASP (Kumagai–Oba):** take the per-atom site potentials that OUTCAR prints by default ("average (electrostatic) potential at core") for the defect and bulk supercells. Match the atoms, and average `V_defect − V_bulk` over the atoms outside the largest sphere inscribed in the supercell's Wigner–Seitz cell (minimum-image distance from the defect > min |R|/2). Put that raw average in `delta_v` and those atoms' fractional coordinates in `alignment_sampling_sites`. `ikazuchix.ewald.point_charge_potential()` exposes the model potential for other workflows.
 
 All fields above are required. The following are **optional** — every input file that omits them keeps working exactly as before; each is read only by the specific opt-in flag noted:
 

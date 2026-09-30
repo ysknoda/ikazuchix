@@ -1,8 +1,14 @@
 # Changelog
 
-## Unreleased
+## Unreleased (target 0.1.0a3)
 
 ### Fixed
+
+- **KO alignment term (docs/adr/0009).** The raw far-field `delta_v` still contains the defect's own point-charge potential, which `E_lat` already accounts for, so it was counted twice. The new optional per-defect `alignment_sampling_sites` list makes ikazuchix subtract the KO point-charge potential averaged over those sites: `E_align = q·(delta_v + <φ_PC>)`. On real data the effect is up to about 2 eV (32-atom AlN V_Al with q = −3). The sign convention is fixed as VASP's own (electron potential energy); it was determined from real data, where the subtracted residual reproduces the neutral state's offset. Inputs without the field behave exactly as before.
+
+### Added
+
+- `ikazuchix.ewald.point_charge_potential()`: the anisotropic, background-neutralized Ewald potential of a periodic point charge. It is validated against eta invariance, an independent reference, and the exact `r -> 0` relation to `E_PC`.
 
 - With `--stability-diagram --solve-fermi`, the stability check now runs and writes `stability_summary.txt` (and its plot) **before** the Fermi-level solve. At an infeasible chemical-potential point the solver fails, since formation energies are strongly negative and no root can be bracketed; the summary explaining that failure is now already on disk.
 

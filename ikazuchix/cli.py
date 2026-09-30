@@ -72,16 +72,19 @@ _REQUIRED_DATA = textwrap.dedent("""\
   |     composition          | Atom counts (optional: auto-computed from    |
   |                          | bulk + removed_atoms + added_atoms)          |
   |     potential_alignment  |                                              |
-  |       delta_v     [eV]   | V_defect(far) - V_bulk(far): electrostatic  |
-  |                          | potential difference at sites far from the   |
-  |                          | defect, from DFT (e.g. VASP LOCPOT).        |
-  |                          | Set 0.0 for neutral state (q = 0).          |
+  |       delta_v     [eV]   | V_defect - V_bulk averaged over far atomic   |
+  |                          | sites, in VASP's sign (electron potential    |
+  |                          | energy). Raw if alignment_sampling_sites is  |
+  |                          | given (phi_PC is then subtracted), else      |
+  |                          | already point-charge subtracted.             |
+  |   alignment_sampling_    | Optional per-defect list of fractional       |
+  |     sites                | [x,y,z] sites delta_v was averaged over      |
   +--------------------------+----------------------------------------------+
 
-  TIP -- obtaining delta_v from VASP:
-    Compute the planar-averaged electrostatic potential (LOCPOT) for both
-    the defect and bulk supercells, then take the difference in the region
-    far from the defect site (typically > ~6 Ang away).
+  TIP -- obtaining delta_v from VASP (Kumagai-Oba, docs/adr/0009):
+    Average the OUTCAR per-atom site potentials V_defect - V_bulk over atoms
+    outside the Wigner-Seitz inscribed sphere (distance > min|R|/2), and
+    list those atoms' fractional coordinates in alignment_sampling_sites.
 """)
 
 _OUTPUTS = textwrap.dedent("""\

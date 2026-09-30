@@ -91,7 +91,9 @@ def compute_charge_state_result(defect_block, cs, data, fermi_ref, fermi_grid,
         ko_calc = KumagaiObaCorrectionCalculator(
             lattice=lattice, epsilon=epsilon, charge=q,
             defect_frac=def_pos, delta_v=delta_v, verbose=verbose,
-            shell_cache=shell_cache, **ewald_kwargs)
+            shell_cache=shell_cache,
+            alignment_sites=defect_block.get("alignment_sampling_sites"),
+            **ewald_kwargs)
         return ko_calc.compute()  # cached after first call, on this instance
 
     ko, captured_warnings = capture_warnings_as_picklable(_build_and_compute)
@@ -165,6 +167,7 @@ def assemble_defect_result(defect_block, charge_results, fermi_grid, gap):
     return dict(
         name=defect_block["name"],
         defect_type=defect_block.get("defect_type", ""),
+        alignment_sites=bool(defect_block.get("alignment_sampling_sites")),
         charges=charges, ko=ko_results,
         ef_by_charge=ef_by_charge, ef_at_fermi=ef_at_fermi,
         fermi_grid=fermi_grid, chem_pot_corr=chem_corrs,

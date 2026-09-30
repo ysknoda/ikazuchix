@@ -192,3 +192,27 @@ def test_stability_summary_written_before_solve_fermi_fails(tmp_path):
     summary = (out / "stability_summary.txt").read_text(encoding="utf-8")
     assert "feasible  : False" in summary
     assert "MgO" in summary
+
+
+@pytest.mark.parametrize("path,name,q", [
+    (ALN, "O_N", 1), (ALN, "V_N", 1),
+    (SPINEL, "Mg_Al", -1), (SPINEL, "Al_Mg", 1), (SPINEL, "V_Mg", -1), (SPINEL, "V_O", 1),
+])
+def test_point_charge_subtraction_recovers_neutral_offset(path, name, q):
+    """docs/adr/0009 on real data: for a localized charged defect,
+    subtracting the point-charge potential from the raw site-averaged
+    delta_v leaves the neutral state's short-range offset -- which only
+    holds with VASP's electron-potential-energy sign convention. The
+    tolerance (0.1 eV) reflects the small, unconverged cells."""
+    from ikazuchix.ewald import point_charge_potential
+
+    data = _load(path)
+    d = next(x for x in data["defects"] if x["name"] == name)
+    dv = {cs["charge"]: cs["potential_alignment"]["delta_v"] for cs in d["charge_states"]}
+    L = build_lattice_matrix(d["supercell"])
+    eps = build_dielectric_tensor(data["dielectric"])
+    phi = point_charge_potential(L, eps, q, d["supercell"]["defect_position"],
+                                 d["alignment_sampling_sites"]).mean()
+    assert dv[q] + phi == pytest.approx(dv[0], abs=0.1)
+    # The opposite sign convention would miss by about 2|phi|:
+    assert abs(dv[q] - phi - dv[0]) > abs(dv[q] + phi - dv[0])

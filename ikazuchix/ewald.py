@@ -43,6 +43,76 @@ def _derive_ewald_params(lattice, epsilon, ewald_param=None):
     return V, G_mat, eps_avg, eps_inv, sqrt_det, eta
 
 
+def point_charge_potential(lattice, epsilon, charge, defect_frac, site_fracs,
+                           ewald_param=None, tol=1e-10, max_shells=40):
+    """Electrostatic potential phi_PC [V] at `site_fracs` of a periodic
+    array of point charges `charge` at `defect_frac`, screened by the
+    full dielectric tensor and neutralized by a uniform background:
+
+        phi(r) = q K [ sum_R erfc(eta r_R) / (sqrt(det eps) r_R)
+                     + (4 pi / V) sum_{G!=0} exp(-G.eps.G / 4 eta^2)
+                                   cos(G.r) / (G.eps.G)
+                     - pi / (V eta^2) ],     r_R = |r + R|_eps
+
+    -- the same Ewald form as E_PC (see KumagaiObaCorrectionCalculator),
+    so lim_{r->0} [phi(r) - q K / (sqrt(det eps) |r|_eps)] = 2 E_PC / q.
+    It is independent of eta (tested) and has zero cell average, so it is
+    negative far from a positive charge. phi is the physicist's
+    electrostatic potential; VASP's LOCPOT/OUTCAR site potentials are
+    the electron potential energy -e*phi (docs/adr/0009).
+
+    Shells are grown until the outermost real- and reciprocal-space
+    shells both contribute < tol [V] at every site (RuntimeWarning if
+    max_shells is reached first).
+    """
+    L = np.asarray(lattice, dtype=float)
+    eps = np.asarray(epsilon, dtype=float)
+    V, G_mat, _eps_avg, eps_inv, sqrt_det, eta = _derive_ewald_params(L, eps, ewald_param)
+    # Offsets defect -> site, wrapped to the minimum-image cell (the
+    # lattice sums below make the result independent of this choice).
+    d_frac = np.asarray(site_fracs, dtype=float) - np.asarray(defect_frac, dtype=float)
+    d_frac -= np.round(d_frac)
+    r = d_frac @ L
+    qK = float(charge) * COULOMB_PREFACTOR
+    total = np.full(len(r), -math.pi / (V * eta**2))
+    erfc = np.vectorize(math.erfc)
+    for kind in ("real", "recip"):
+        n = 0
+        while True:
+            shell = _shell_indices(n)
+            if kind == "recip" and n == 0:
+                shell = np.zeros((0, 3))  # G = 0 is the background term above
+            if kind == "real":
+                d = r[:, None, :] + (shell @ L)[None, :, :]
+                x = np.sqrt(np.einsum("sni,ij,snj->sn", d, eps_inv, d))
+                contrib = np.sum(erfc(eta * x) / (sqrt_det * x), axis=1)
+            else:
+                G = shell @ G_mat
+                geg = np.einsum("ni,ij,nj->n", G, eps, G)
+                w = np.exp(-geg / (4.0 * eta**2)) / geg if len(G) else np.zeros(0)
+                contrib = 4.0 * math.pi / V * (np.cos(r @ G.T) @ w)
+            total += contrib
+            if n > 0 and np.max(np.abs(qK * contrib)) < tol:
+                break
+            if n >= max_shells:
+                warnings.warn(
+                    f"[point_charge_potential] {kind}-space sum not converged to "
+                    f"{tol:.0e} V within {max_shells} shells.", RuntimeWarning,
+                    stacklevel=2)
+                break
+            n += 1
+    return qK * total
+
+
+def _shell_indices(n):
+    """Integer triples with max(|n_i|) == n (n = 0: just the origin)."""
+    if n == 0:
+        return np.zeros((1, 3))
+    rng = np.arange(-n, n + 1)
+    g = np.array(np.meshgrid(rng, rng, rng, indexing="ij")).reshape(3, -1).T
+    return g[np.max(np.abs(g), axis=1) == n].astype(float)
+
+
 class KumagaiObaCorrectionCalculator:
     """
     Finite-size charge correction: Kumagai & Oba, PRB 89, 195205 (2014).
@@ -113,7 +183,7 @@ class KumagaiObaCorrectionCalculator:
     def __init__(self, lattice, epsilon, charge, defect_frac, delta_v,
                  ewald_param=None, real_cutoff=3, recip_cutoff=3,
                  verbose=False, adaptive=False, ewald_tol=None,
-                 max_shells=15, shell_cache=None):
+                 max_shells=15, shell_cache=None, alignment_sites=None):
         self.L        = lattice
         self.eps      = np.asarray(epsilon, dtype=float)
         self.q        = int(charge)
@@ -131,6 +201,13 @@ class KumagaiObaCorrectionCalculator:
         self.n_recip_used = self.n_recip
         self.shell_cache  = shell_cache   # (Perf-1) optional defect-level raw-sum cache
         self._cache   = None   # (C-3) result cache
+        # docs/adr/0009: fractional coordinates of the atomic sites over
+        # which delta_v was averaged. When given, the point-charge
+        # potential averaged over the same sites is subtracted, in
+        # VASP's electron-potential-energy convention (-e*phi), i.e.
+        # E_alignment = q * (delta_v + <phi_PC>_sites).
+        self.alignment_sites = (None if alignment_sites is None
+                                else np.asarray(alignment_sites, dtype=float))
 
     # ------------------------------------------------------------------
     # Ewald real-space sum  (Eq. 13, KO 2014)
@@ -276,7 +353,7 @@ class KumagaiObaCorrectionCalculator:
         if self.q == 0:
             self._cache = {k: 0.0 for k in (
                 "E_real", "E_recip", "E_self_ewald", "E_neutralize",
-                "E_PC", "E_lat", "E_alignment", "E_KO")}
+                "E_PC", "E_lat", "phi_PC_sites", "E_alignment", "E_KO")}
             return self._cache
 
         E_real       = self._E_real()
@@ -285,13 +362,17 @@ class KumagaiObaCorrectionCalculator:
         E_neutralize = self._E_neutralize()
         E_PC         = E_real + E_recip + E_self_ewald + E_neutralize
         E_lat        = -E_PC
-        E_alignment  = self.q * self.delta_v
+        phi_PC_sites = 0.0
+        if self.alignment_sites is not None:
+            phi_PC_sites = float(np.mean(point_charge_potential(
+                self.L, self.eps, self.q, self.r_def, self.alignment_sites)))
+        E_alignment  = self.q * (self.delta_v + phi_PC_sites)
         E_KO         = E_lat + E_alignment
 
         self._cache = dict(
             E_real=E_real, E_recip=E_recip,
             E_self_ewald=E_self_ewald, E_neutralize=E_neutralize,
-            E_PC=E_PC, E_lat=E_lat, E_alignment=E_alignment, E_KO=E_KO)
+            E_PC=E_PC, E_lat=E_lat, phi_PC_sites=phi_PC_sites, E_alignment=E_alignment, E_KO=E_KO)
 
         if self.verbose:
             print(f"\n  --- KO Correction (q={self.q:+d}) ---")

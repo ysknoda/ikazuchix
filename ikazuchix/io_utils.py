@@ -337,6 +337,7 @@ def _validate_nested_required_keys(raw):
                 "'supercell' is defined.")
         _validate_supercell_block(sc, context)
         _validate_optional_positive_number(d, "site_density", context)
+        _validate_alignment_sampling_sites(d, context)
 
     competing_phases = raw.get("competing_phases") or []
     if not isinstance(competing_phases, list):
@@ -356,6 +357,21 @@ def _validate_nested_required_keys(raw):
             raise ValueError(
                 f"{context}: 'composition' must be a non-empty mapping "
                 "of {species: count, ...}.")
+
+
+def _validate_alignment_sampling_sites(defect_block, context):
+    """Optional per-defect 'alignment_sampling_sites' (docs/adr/0009): a
+    non-empty list of fractional [x, y, z] coordinates."""
+    if "alignment_sampling_sites" not in defect_block:
+        return
+    sites = defect_block["alignment_sampling_sites"]
+    ok = (isinstance(sites, list) and len(sites) > 0 and all(
+        isinstance(s, (list, tuple)) and len(s) == 3 and all(_is_number(x) for x in s)
+        for s in sites))
+    if not ok:
+        raise ValueError(
+            f"{context}: 'alignment_sampling_sites' must be a non-empty list "
+            "of fractional [x, y, z] coordinates.")
 
 
 def _validate_formation_reference(bulk):

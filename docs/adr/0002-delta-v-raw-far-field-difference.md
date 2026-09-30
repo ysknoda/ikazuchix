@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0009 (the point-charge subtraction and the sign convention; the neutral offset is kept)
 date: 2026-09-30
 ---
 

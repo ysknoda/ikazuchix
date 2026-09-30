@@ -26,7 +26,7 @@ def test_neutral_charge_is_all_zero():
     result = _calc(0).compute()
     assert result == {k: 0.0 for k in
                        ("E_real", "E_recip", "E_self_ewald", "E_neutralize",
-                        "E_PC", "E_lat", "E_alignment", "E_KO")}
+                        "E_PC", "E_lat", "phi_PC_sites", "E_alignment", "E_KO")}
 
 
 def test_charge_sign_symmetry():

@@ -87,6 +87,8 @@ def format_report(data, all_results, fermi_ref, ewald_eta_override=None):
                 f"      E_neutralize  : {ko['E_neutralize']:+.6f} eV",
                 f"      E_PC          : {ko['E_PC']:+.6f} eV",
                 f"      E_lat (-E_PC) : {ko['E_lat']:+.6f} eV",
+                *([f"      <phi_PC>sites : {ko['phi_PC_sites']:+.6f} V"]
+                  if res.get("alignment_sites") else []),
                 f"      E_alignment   : {ko['E_alignment']:+.6f} eV",
                 f"      E_KO (total)  : {ko['E_KO']:+.6f} eV",
                 f"      Chem.pot.corr.: {res['chem_pot_corr'][q]:+.6f} eV",
