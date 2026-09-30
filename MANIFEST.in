@@ -6,6 +6,7 @@
 # regression tests read tests/golden/*.txt.
 include LICENSE
 include README.md
+include CHANGELOG.md
 recursive-include examples *.yaml
 recursive-include tests *.py
 recursive-include tests/golden *.txt *.log
