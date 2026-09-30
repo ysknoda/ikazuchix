@@ -168,3 +168,27 @@ def test_spinel_end_to_end_cli(tmp_path):
     assert "feasible  : True" in summary
     assert (tmp_path / "plots" / "stability_region.png").stat().st_size > 0
     assert "Solved Fermi level" in (tmp_path / "equilibrium_summary.txt").read_text()
+
+
+def test_stability_summary_written_before_solve_fermi_fails(tmp_path):
+    """F6 (vasp_smoke/REPORT.md): at an infeasible chemical-potential
+    point, formation energies go strongly negative and --solve-fermi
+    cannot bracket a root and exits non-zero. The stability summary,
+    which explains why, must already be on disk by then."""
+    import yaml
+
+    raw = yaml.safe_load(SPINEL.read_text(encoding="utf-8"))
+    fr = raw["bulk"]["formation_reference"]
+    refs = raw["elemental_references"]
+    dH = fr["energy"] - sum(n * refs[sp] for sp, n in fr["composition"].items())
+    raw["chemical_potentials"] = {"O": 0.0, "Mg": 0.0, "Al": dH / fr["composition"]["Al"]}
+    inp = tmp_path / "outside.yaml"
+    inp.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    out = tmp_path / "out"
+    result = run_cli(["-i", str(inp), "--out-dir", str(out),
+                      "--solve-fermi", "--stability-diagram"])
+    assert result.returncode != 0
+    assert "no root is bracketed" in result.stderr
+    summary = (out / "stability_summary.txt").read_text(encoding="utf-8")
+    assert "feasible  : False" in summary
+    assert "MgO" in summary

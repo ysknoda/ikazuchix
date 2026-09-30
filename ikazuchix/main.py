@@ -215,7 +215,27 @@ def main():
             _out(out, "plots", args.comparison_plot))
 
     # ------------------------------------------------------------------ #
-    # 6. Equilibrium Fermi level & concentrations (Feat-1, opt-in) --
+    # 6. Chemical potential stability region (Feat-2, opt-in) -- rank 0
+    #    only, self-contained (only reads `data`; no all_results or MPI
+    #    dependency), so no raise_consistently() is needed here either.
+    #    Runs BEFORE --solve-fermi: at an infeasible chemical-potential
+    #    point the solver cannot bracket a root and raises, and this
+    #    summary is what explains why (F6, vasp_smoke/REPORT.md).
+    # ------------------------------------------------------------------ #
+    if args.stability_diagram:
+        stab_result = stability_summary(data)
+        print(f"\n[INFO] Chemical potential stability check: "
+              f"{'FEASIBLE' if stab_result['feasible'] else 'INFEASIBLE'}")
+        for v in stab_result["violations"]:
+            print(f"[WARNING]   - {v}")
+        write_stability_summary(
+            _out(out, "stability_summary.txt"), data, stab_result)
+        if args.plot:
+            plot_stability_region(
+                data, stab_result, _out(out, "plots", args.stability_plot))
+
+    # ------------------------------------------------------------------ #
+    # 7. Equilibrium Fermi level & concentrations (Feat-1, opt-in) --
     #    rank 0 only (already past the `if rank != 0: return` above), and
     #    self-contained (only reads already-gathered `data`/`all_results`,
     #    no further MPI collective calls), so no raise_consistently() is
@@ -250,20 +270,3 @@ def main():
               f"p = {eq_result['hole_conc_cm3']:.4e} cm^-3")
         write_equilibrium_summary(
             _out(out, "equilibrium_summary.txt"), data, eq_result)
-
-    # ------------------------------------------------------------------ #
-    # 7. Chemical potential stability region (Feat-2, opt-in) -- rank 0
-    #    only, self-contained (only reads `data`; no all_results or MPI
-    #    dependency), so no raise_consistently() is needed here either.
-    # ------------------------------------------------------------------ #
-    if args.stability_diagram:
-        stab_result = stability_summary(data)
-        print(f"\n[INFO] Chemical potential stability check: "
-              f"{'FEASIBLE' if stab_result['feasible'] else 'INFEASIBLE'}")
-        for v in stab_result["violations"]:
-            print(f"[WARNING]   - {v}")
-        write_stability_summary(
-            _out(out, "stability_summary.txt"), data, stab_result)
-        if args.plot:
-            plot_stability_region(
-                data, stab_result, _out(out, "plots", args.stability_plot))

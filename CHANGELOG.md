@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- With `--stability-diagram --solve-fermi`, the stability check now runs and writes `stability_summary.txt` (and its plot) **before** the Fermi-level solve. At an infeasible chemical-potential point the solver fails, since formation energies are strongly negative and no root can be bracketed; the summary explaining that failure is now already on disk.
+
 ### Added
 
 - Optional `bulk.formation_reference: {energy, composition}` holds a k-converged host energy for the host formation enthalpy: the host-stability checks and `--stability-diagram`. The defect-supercell `bulk.energy` stays the reference for `E_def - E_bulk`. A stoichiometry mismatch with `bulk.composition` is an input error. See `docs/adr/0007`.
