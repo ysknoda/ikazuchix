@@ -10,12 +10,21 @@ jobs:
     # Enforces the "must fully work with only the minimal dependency
     # set" requirement on every PR, rather than that being a one-time
     # manual check: no matplotlib, no numba, no mpi4py installed here.
+    #
+    # Runs on every Python version pyproject.toml claims (requires-python
+    # >= 3.10 and the 3.10-3.13 classifiers), so those claims are backed
+    # by CI. Only this cheap job is matrixed; full and mpi run on a
+    # single version to limit Actions minutes.
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
       - run: pytest -v -rs
 
@@ -32,7 +41,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"  # newest supported; see the core matrix for the rest
       - run: pip install -e ".[all,dev]"
       - run: pytest -v -rs
 
@@ -51,7 +60,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"  # newest supported; see the core matrix for the rest
       - run: sudo apt-get update && sudo apt-get install -y openmpi-bin libopenmpi-dev
       - run: pip install -e ".[all,dev]"
       - run: pytest tests/test_mpi_consistency.py -v -rs
