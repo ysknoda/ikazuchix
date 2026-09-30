@@ -14,6 +14,11 @@
 > equilibrium concentrations from those versions should be recomputed.
 > See [CHANGELOG.md](CHANGELOG.md) and
 > [docs/adr/0006](docs/adr/0006-ko-ewald-lattice-energy-fix.md).
+>
+> **0.1.0a3:** a raw far-field `delta_v` also double-counts the defect's own
+> point-charge potential. List the sites it was averaged over in
+> `alignment_sampling_sites` so ikazuchix subtracts that potential
+> ([docs/adr/0009](docs/adr/0009-ko-alignment-point-charge-subtraction.md)).
 
 Defect formation energy calculator for semiconductors, from VASP-style DFT total energies, with the Kumagai-Oba (KO) finite-size charge correction:
 

@@ -1,28 +1,22 @@
 # Changelog
 
-## Unreleased (target 0.1.0a3)
+## 0.1.0a3 — 2026-10-01
 
 ### Fixed
 
 - **KO alignment term (docs/adr/0009).** The raw far-field `delta_v` still contains the defect's own point-charge potential, which `E_lat` already accounts for, so it was counted twice. The new optional per-defect `alignment_sampling_sites` list makes ikazuchix subtract the KO point-charge potential averaged over those sites: `E_align = q·(delta_v + <φ_PC>)`. On real data the effect is up to about 2 eV (32-atom AlN V_Al with q = −3). The sign convention is fixed as VASP's own (electron potential energy); it was determined from real data, where the subtracted residual reproduces the neutral state's offset. Inputs without the field behave exactly as before.
-
-### Added
-
-- `ikazuchix.ewald.point_charge_potential()`: the anisotropic, background-neutralized Ewald potential of a periodic point charge. It is validated against eta invariance, an independent reference, and the exact `r -> 0` relation to `E_PC`.
-
 - With `--stability-diagram --solve-fermi`, the stability check now runs and writes `stability_summary.txt` (and its plot) **before** the Fermi-level solve. At an infeasible chemical-potential point the solver fails, since formation energies are strongly negative and no root can be bracketed; the summary explaining that failure is now already on disk.
 
 ### Added
 
+- `ikazuchix.ewald.point_charge_potential()`: the anisotropic, background-neutralized Ewald potential of a periodic point charge. It is validated against eta invariance, an independent reference, and the exact `r -> 0` relation to `E_PC`.
 - Optional `bulk.formation_reference: {energy, composition}` holds a k-converged host energy for the host formation enthalpy: the host-stability checks and `--stability-diagram`. The defect-supercell `bulk.energy` stays the reference for `E_def - E_bulk`. A stoichiometry mismatch with `bulk.composition` is an input error. See `docs/adr/0007`.
-
-### Added (examples)
-
 - `examples/AlN_vasp_smoke.yaml` and `examples/MgAl2O4_vasp_smoke.yaml` hold numbers extracted from real, small-cell, unconverged VASP 6.6.1 PBE runs, for smoke tests only. `tests/test_vasp_smoke_examples.py` pins the ternary stability polygon against an independent vertex enumeration and checks the KO energy of the simple-cubic spinel cell against the Madelung constant.
 
 ### Changed
 
 - The stability-region axes are ordered by atomic number, not alphabetically. For MgAl2O4 the x and y axes are `O` and `Mg`, and `Al` is eliminated. Labels that are not element symbols sort last.
+- CI: the `core` job runs on Python 3.10–3.13, and `full`/`mpi` run on 3.13.
 
 ## 0.1.0a2 — 2026-09-30
 
