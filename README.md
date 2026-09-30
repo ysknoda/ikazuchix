@@ -267,6 +267,8 @@ ikazuchix/                     # implementation package; run as `python -m ikazu
 tests/                        # pytest suite (see below)
 benchmarks/                   # standalone timing scripts (not part of pytest)
 examples/example_input.yaml   # synthetic example input
+examples/AlN_vasp_smoke.yaml  # real small-cell VASP data, binary host (unconverged; smoke test)
+examples/MgAl2O4_vasp_smoke.yaml  # real small-cell VASP data, ternary host with stability polygon
 ```
 
 ## Testing
