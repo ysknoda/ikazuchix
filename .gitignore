@@ -43,3 +43,7 @@ env/
 /equilibrium_summary.txt
 /stability_summary.txt
 /plots/
+
+# Local real-VASP smoke test workspace (docs/adr/0001) -- contains
+# licensed POTCARs and large VASP outputs; never commit.
+/vasp_smoke/
