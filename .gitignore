@@ -47,3 +47,10 @@ env/
 # Local real-VASP smoke test workspace (docs/adr/0001) -- contains
 # licensed POTCARs and large VASP outputs; never commit.
 /vasp_smoke/
+
+# Private GaN tutorial workspace (VASP outputs incl. licensed POTCARs,
+# manual build files) -- not for publication; never commit.
+/tutorial_GaN/
+
+# Others
+/references/
