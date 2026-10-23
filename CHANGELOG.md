@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Input validation (docs/adr/0010).** Both of these used to be accepted silently or with only a stderr warning, and now raise `ValueError` at load time:
+  - `band_structure.bandgap` differs from `cbm - vbm` by more than 1e-3 eV. Every calculation uses `cbm - vbm`, and `bandgap` is only echoed in the `results.txt` header. A scissor edit to `cbm` without updating `bandgap` therefore produced a header that disagreed with the results.
+  - A declared `num_atoms` (bulk or charge state) differs from `sum(composition)`, or is not numeric. Before, this was a `UserWarning` on stderr, which is lost when only stdout is redirected.
+
+  Valid inputs produce byte-identical output, and the goldens are unchanged.
+
 ## 0.1.0a3 — 2026-10-01
 
 ### Fixed

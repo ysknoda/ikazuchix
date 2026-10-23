@@ -11,6 +11,11 @@ import yaml
 # I/O helpers
 # ===========================================================================
 
+# Allowed |bandgap - (cbm - vbm)| [eV]: band edges are typically quoted
+# to 1e-4..1e-3 eV, so a larger difference is an inconsistency, not
+# rounding (see docs/adr/0010).
+_BANDGAP_TOL_EV = 1e-3
+
 _REQUIRED_TOP_SECTIONS = (
     "bulk", "chemical_potentials", "elemental_references",
     "band_structure", "dielectric", "supercell",
@@ -319,6 +324,15 @@ def _validate_nested_required_keys(raw):
         raise ValueError(
             f"'band_structure.cbm' ({bs['cbm']}) must be greater than "
             f"'band_structure.vbm' ({bs['vbm']}).")
+    gap_from_edges = bs["cbm"] - bs["vbm"]
+    if abs(bs["bandgap"] - gap_from_edges) > _BANDGAP_TOL_EV:
+        raise ValueError(
+            f"'band_structure.bandgap' ({bs['bandgap']}) does not match "
+            f"cbm - vbm ({gap_from_edges:.6g}) within "
+            f"{_BANDGAP_TOL_EV:g} eV.  Every calculation uses cbm - vbm; "
+            "'bandgap' is only echoed in the results.txt header.  If you "
+            "shifted 'cbm' (e.g. a scissor correction), update 'bandgap' "
+            "to match.")
     _validate_optional_positive_number(bs, "effective_mass_e", "band_structure")
     _validate_optional_positive_number(bs, "effective_mass_h", "band_structure")
 
@@ -432,27 +446,28 @@ def _validate_supercell_block(sc, context):
 
 
 def _check_num_atoms(label, block):
-    """Warn if a declared 'num_atoms' disagrees with sum(composition)."""
+    """Raise if a declared 'num_atoms' disagrees with sum(composition).
+
+    'num_atoms' is never used in any calculation; it exists only as a
+    cross-check on 'composition', which does feed the chemical-potential
+    term.  A mismatch therefore means one of the two is wrong, so it is
+    an error rather than a stderr warning (see docs/adr/0010).
+    """
     comp = block.get("composition")
     if "num_atoms" not in block or not comp:
         return
     n_declared  = block["num_atoms"]
     n_from_comp = sum(comp.values())
-    try:
-        mismatch = float(n_declared) != float(n_from_comp)
-    except (TypeError, ValueError):
-        warnings.warn(
-            f"[Input] {label}: num_atoms ({n_declared!r}) is not "
-            "numeric; cannot cross-check against "
-            f"sum(composition.values()) ({n_from_comp}).",
-            UserWarning, stacklevel=3)
-        return
-    if mismatch:
-        warnings.warn(
-            f"[Input] {label}: num_atoms ({n_declared}) does not match "
-            f"sum(composition.values()) ({n_from_comp}).  "
-            "Verify your input data.",
-            UserWarning, stacklevel=3)
+    if not _is_number(n_declared):
+        raise ValueError(
+            f"{label}: 'num_atoms' must be a numeric value (got "
+            f"{n_declared!r}); it is cross-checked against "
+            f"sum(composition.values()) ({n_from_comp}).")
+    if float(n_declared) != float(n_from_comp):
+        raise ValueError(
+            f"{label}: 'num_atoms' ({n_declared}) does not match "
+            f"sum(composition.values()) ({n_from_comp}).  Fix whichever "
+            "of the two is wrong, or omit 'num_atoms'.")
 
 
 def _safe_mkdir(path):

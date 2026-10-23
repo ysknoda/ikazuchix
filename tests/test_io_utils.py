@@ -115,10 +115,37 @@ def test_missing_defect_and_defects_raises_keyerror(tmp_path):
         load_input(path)
 
 
-def test_num_atoms_mismatch_warns(tmp_path):
+def test_num_atoms_mismatch_raises(tmp_path):
+    """num_atoms is only a cross-check on composition (which feeds the
+    mu term), so a mismatch is an error, not a stderr warning that is
+    lost when only stdout is captured (docs/adr/0010)."""
     path = _write_yaml(tmp_path, _multi_defect(charge_kwargs={"num_atoms": 999}))
-    with pytest.warns(UserWarning, match="num_atoms"):
+    with pytest.raises(ValueError, match="num_atoms"):
         load_input(path)
+
+
+def test_bulk_num_atoms_mismatch_raises(tmp_path):
+    data = _multi_defect()
+    data["bulk"] = dict(data["bulk"], num_atoms=3)
+    path = _write_yaml(tmp_path, data)
+    with pytest.raises(ValueError, match="bulk: 'num_atoms' \\(3\\)"):
+        load_input(path)
+
+
+@pytest.mark.parametrize("bad", ["two", True, None])
+def test_non_numeric_num_atoms_raises(tmp_path, bad):
+    data = _multi_defect()
+    data["bulk"] = dict(data["bulk"], num_atoms=bad)
+    path = _write_yaml(tmp_path, data)
+    with pytest.raises(ValueError, match="num_atoms"):
+        load_input(path)
+
+
+def test_num_atoms_omitted_is_accepted(tmp_path):
+    data = _multi_defect()
+    data["bulk"] = {k: v for k, v in data["bulk"].items() if k != "num_atoms"}
+    path = _write_yaml(tmp_path, data)
+    load_input(path)
 
 
 def test_num_atoms_consistent_does_not_warn(tmp_path, recwarn):
@@ -298,6 +325,33 @@ def test_cbm_less_than_vbm_raises(tmp_path):
     path = _write_yaml(tmp_path, data)
     with pytest.raises(ValueError, match="cbm"):
         load_input(path)
+
+
+@pytest.mark.parametrize("bandgap", [2.0011, 1.9989, 1.5])
+def test_bandgap_inconsistent_with_edges_raises(tmp_path, bandgap):
+    """Scissor workflow: cbm edited, bandgap forgotten -> the results.txt
+    header would print a gap that no calculation used (docs/adr/0010)."""
+    data = dict(_multi_defect())
+    data["band_structure"] = dict(data["band_structure"], bandgap=bandgap)
+    path = _write_yaml(tmp_path, data)
+    with pytest.raises(ValueError, match="bandgap"):
+        load_input(path)
+
+
+@pytest.mark.parametrize("bandgap", [2.0, 2.0009, 1.9991])
+def test_bandgap_within_tolerance_is_accepted(tmp_path, bandgap):
+    data = dict(_multi_defect())
+    data["band_structure"] = dict(data["band_structure"], bandgap=bandgap)
+    path = _write_yaml(tmp_path, data)
+    load_input(path)
+
+
+def test_bandgap_float_rounding_is_accepted(tmp_path):
+    """6.7 - 5.0 = 1.7000000000000002 in binary floating point."""
+    data = dict(_multi_defect())
+    data["band_structure"] = dict(vbm=5.0, cbm=6.7, bandgap=1.7, fermi_level=5.85)
+    path = _write_yaml(tmp_path, data)
+    load_input(path)
 
 
 def test_band_structure_missing_key_raises(tmp_path):

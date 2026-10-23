@@ -124,11 +124,11 @@ All input is a single YAML file. Two layouts are accepted:
 |---|---|
 | `bulk.formula` | Chemical formula of the host material |
 | `bulk.energy` [eV] | DFT total energy of the perfect supercell |
-| `bulk.num_atoms` | Number of atoms in the bulk supercell (cross-checked against `composition`) |
+| `bulk.num_atoms` | Number of atoms in the bulk supercell. Optional; if given, it must equal `sum(composition)` or loading fails with `ValueError` (it is never used in a calculation, only as a check on `composition`; see `docs/adr/0010`) |
 | `bulk.composition` | Atom counts `{species: N, ...}` |
 | `chemical_potentials.<species>` [eV] | `Δμ_i` = deviation from the elemental reference (e.g. `Ga: 0.000` for Ga-rich) |
 | `elemental_references.<species>` [eV/atom] | DFT reference energy of the elemental solid/molecule |
-| `band_structure.vbm` / `.cbm` / `.bandgap` / `.fermi_level` [eV] | Absolute VBM/CBM, band gap, default reference Fermi level |
+| `band_structure.vbm` / `.cbm` / `.bandgap` / `.fermi_level` [eV] | Absolute VBM/CBM, band gap, default reference Fermi level. Every calculation uses `cbm − vbm`; `bandgap` is only echoed in the `results.txt` header and must equal `cbm − vbm` within 1e-3 eV, otherwise loading fails with `ValueError`. After a scissor correction (shifting `cbm`), update `bandgap` too. |
 | `dielectric.tensor` | Full 3x3 static dielectric tensor (diagonal for cubic/hexagonal systems) |
 | `supercell.lattice_vectors` [Å] | `a`, `b`, `c` lattice vectors (can be overridden per defect) |
 | `supercell.defect_position` | Fractional coordinates of the defect site |
@@ -136,7 +136,7 @@ All input is a single YAML file. Two layouts are accepted:
 | `defects[].removed_atoms` / `.added_atoms` | `{species: count}` — drives automatic composition completion |
 | `defects[].charge_states[].charge` | Integer charge `q` (negative = acceptor-like) |
 | `defects[].charge_states[].energy` [eV] | DFT total energy of the defect supercell |
-| `defects[].charge_states[].num_atoms` | Atom count of the defect supercell (cross-checked against `composition`) |
+| `defects[].charge_states[].num_atoms` | Atom count of the defect supercell. Optional; if given, it must equal `sum(composition)` (explicit or auto-completed) or loading fails with `ValueError` |
 | `defects[].charge_states[].composition` | Atom counts (optional — auto-computed from bulk + removed/added atoms if omitted) |
 | `defects[].charge_states[].potential_alignment.delta_v` [eV] | `V_defect − V_bulk` averaged over the sampling region, **in VASP's own sign convention** (OUTCAR site potentials / LOCPOT are electron potential energies, `−eφ`). Without `alignment_sampling_sites` it must already have the point-charge potential subtracted; with them, give the raw difference. Irrelevant for `q = 0`. |
 | `defects[].alignment_sampling_sites` | Optional list of fractional `[x, y, z]` atomic sites over which the raw `delta_v` was averaged. When given, ikazuchix subtracts the Kumagai–Oba point-charge potential averaged over the same sites: `E_align = q·(delta_v + ⟨φ_PC⟩)`. See `docs/adr/0009`. |

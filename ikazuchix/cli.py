@@ -28,6 +28,7 @@ _REQUIRED_DATA = textwrap.dedent("""\
   |   formula                | Chemical formula of the host material        |
   |   energy          [eV]   | DFT total energy of the perfect supercell    |
   |   num_atoms              | Number of atoms in the bulk supercell        |
+  |                          | (optional; error if != sum(composition))     |
   |   composition            | Atom counts  {species: N, ...}               |
   +--------------------------+----------------------------------------------+
   | [chemical_potentials]    | Deltamu_i = deviation from elemental reference    |
@@ -43,11 +44,13 @@ _REQUIRED_DATA = textwrap.dedent("""\
   | [band_structure]         |                                              |
   |   vbm             [eV]   | Valence band maximum (absolute DFT value)    |
   |   cbm             [eV]   | Conduction band minimum                      |
-  |   bandgap         [eV]   | Band gap (= cbm - vbm)                       |
+  |   bandgap         [eV]   | Band gap; must equal cbm - vbm within 1e-3 eV|
+  |                          | (error otherwise; only echoed in the header) |
   |   fermi_level     [eV]   | Default reference Fermi level (absolute)     |
   |                          | Note: scissors correction can be applied by  |
   |                          |   setting cbm to the corrected value while   |
   |                          |   keeping PBE total energies for E_defect    |
+  |                          |   (update bandgap to the new cbm - vbm too)  |
   +--------------------------+----------------------------------------------+
   | [dielectric]             |                                              |
   |   tensor    [3x3, dim'less] Full static dielectric tensor (electronic  |
@@ -69,6 +72,7 @@ _REQUIRED_DATA = textwrap.dedent("""\
   |     charge               | Integer charge q (negative = acceptor-like)  |
   |     energy        [eV]   | DFT total energy of the defect supercell     |
   |     num_atoms            | Number of atoms in the defect supercell      |
+  |                          | (optional; error if != sum(composition))     |
   |     composition          | Atom counts (optional: auto-computed from    |
   |                          | bulk + removed_atoms + added_atoms)          |
   |     potential_alignment  |                                              |
